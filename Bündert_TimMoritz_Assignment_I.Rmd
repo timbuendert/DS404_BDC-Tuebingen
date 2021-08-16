@@ -1,0 +1,831 @@
+---
+title: "Assignment I: Code profiling, optimization, {data.table} "
+author: "Submitted by Tim-Moritz Bündert (Student ID: 5635975)"
+date: "May 16, 2021"
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I hereby assure that my submission is in line with the *Examination and Assessment Honor Code* outlined on the lecture slides and below:
+
+### Examination and Assessment Honor Code
+
+All members of the School of Business and Economics at the University of Tübingen (faculty, students, and alumni) share a commitment to honesty and integrity. In particular, all members follow the standards of scholarship and professionalism in all examinations and assessments.
+
+By submitting these assignments, students agree to comply with this Examination and Assessment Honor Code.
+
+Students who violate this Honor Code are in breach of this agreement and are subject to sanctions imposed by the School of Business and Economics, the University and its responsible bodies (e.g., the board of examiners (“Prüfungsausschuss”)).
+
+1. All members of the School of Business and Economics at the University of Tübingen (faculty, students, and alumni) have the obligation to report known violations to the responsible bodies (e.g., the board of examiners (“Prüfungsausschuss”) or the Dean of Programs)
+2. You must not represent another’s work as your own
+3. You must not receive inadmissible assistance of any sort before, during, or after an examination or other forms of course work that is subject to assessment by faculty members
+4. You must not provide inadmissible assistance of any sort before, during, or after an examination or other forms of course work that is subject to assessment by faculty members
+5. Violations of this Honor Code will be handled according to the rules and regulations laid out in the rules for this course
+
+
+## General setup
+
+Before I start the project, I install (if necessary) and load the packages that are needed for the assignment.
+
+```{r script_header, message=FALSE, warning = FALSE}
+# Check if packages have been installed before; if not, install them
+if (!require("vroom")) install.packages("vroom"); library(vroom)
+if (!require("data.table")) install.packages("data.table"); library(data.table)
+if (!require("tidyverse")) install.packages("tidyverse"); library(tidyverse)
+if (!require("recipes")) install.packages("recipes"); library(recipes)
+if (!require("lfe")) install.packages("lfe"); library(lfe)
+if (!require("plm")) install.packages("plm"); library(plm)
+if (!require("profvis")) install.packages("profvis"); library(profvis)
+if (!require("fixest")) install.packages("fixest"); library(fixest)
+if (!require("pryr")) install.packages("pryr"); library(pryr)
+if (!require("MatrixModels")) install.packages("MatrixModels"); library(MatrixModels)
+if (!require("matrixStats")) install.packages("matrixStats"); library(matrixStats)
+if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+```
+
+Next, I make my hardware and software specs transparent:
+
+```{r specs}
+sessionInfo()
+Sys.info()                              # Operating system
+parallel::detectCores(logical = FALSE)  # CPU cores
+benchmarkme::get_ram()                  # RAM
+```
+
+# Exercise 1: Optimize the following code
+> However, in multiple places, the code is written very inefficiently and could easily be improved. Your task is to do just that, optimize the code. For each change in code, provide an explanation and - if an improvement is visible - profiling results. You should optimize code either because the profiling results indicate room for improvement or because a general principle of efficient coding is violated.
+
+First, the following slow code (implementation of 5-fold cross-validation for the (cv-)lasso algorithm) is profiled to detect the bottlenecks which can be used to optimize it.
+
+```{r slow_code, eval=FALSE, include=TRUE}
+profvis({
+  # Load packages
+  library(glmnet)
+  # Import the data
+  d <- read.csv("dff/beer_sales_brandlevel.csv", colClasses = c("brand" = "factor", "store" = "factor", "week" = "factor"))
+  
+  # Function for estimating the lasso model
+  lasso_slow <- function(dataset, idx1, idx2) {
+  # Creating new variables - taking the logarithm for move and price
+  dataset$log_move_in_ounces <- log(dataset$move_in_ounces) 
+  dataset$log_price_per_ounce <- log(dataset$price_per_ounce)
+  # Selecting variables to be used in the rest of the code
+  dataset <- subset(dataset, select = c(log_move_in_ounces, log_price_per_ounce,
+                                          sales_promo_bonus_buy,
+                                          sales_promo_price_reduc,
+                                          sales_promo_coupon,
+                                          sales_promo_unknown,
+                                          brand, store, week))
+  # Creating a formula with all variables that will be used later
+  form <- as.formula(paste("log_move_in_ounces ~ ",
+                           paste0(names(dataset)[-1], collapse = " + "), " - 1"))
+  
+  # Creating a matrix only containing the numeric features/covariates for the model
+  cov_matrix <- as.matrix(subset(dataset, select = c(log_price_per_ounce, sales_promo_bonus_buy,
+                                                       sales_promo_price_reduc,
+                                                       sales_promo_coupon,
+                                                       sales_promo_unknown)))
+  # Scaling the numeric covariates, using only the training data to determine # center and scale
+  cov_scaled <- scale(cov_matrix,
+                      center = apply(cov_matrix[idx1,], 2, mean), 
+                      scale = apply(cov_matrix[idx1,], 2, sd))
+  # Creating a data.frame that contains all variables again: the outcome, the # scaled numeric covariates,
+  # and the factor covaraites
+  all_vars <- cbind(cov_scaled,
+                    dataset[, c("log_move_in_ounces", "brand", "store", "week")])
+  # Converting the data.frame to a numeric matrix, thereby generating dummy variables # out of all factor variables
+  covs_numeric_matrix <- model.matrix(form, all_vars)
+  
+  # Estimating the lasso model via cross-validation on the training data (idx1)
+  lasso <- cv.glmnet(x = covs_numeric_matrix[idx1, ],
+                     y = all_vars$log_move_in_ounces[idx1], alpha = 1)
+  # Make predictions on the test set (idx2), using the trained model
+  Yhat <- as.numeric(predict(lasso, newx = covs_numeric_matrix[idx2, ])) # Compute the residual
+  Y_resid <- dataset$log_move_in_ounces[idx2] - Yhat # Compute the mse
+  mse_y <- mean(Y_resid^2) 
+  return(mse_y)
+  }
+  
+  # Function for the cross validation, calls the lasso function
+  cv_lasso_slow <- function(dataset, K = 5) {
+  # Generate indices for K folds. The object should have K columns, each
+  # corresponding to the row indices for one fold. Each observation should appear # in one fold and one fold only
+  idx <- seq(1, nrow(dataset))
+  idx_k <- sample(idx, 1/K * nrow(dataset))
+  idx <- setdiff(idx, idx_k)
+  for (k in seq(2, K)) {
+    idx_k <- cbind(idx_k, sample(idx, 1/K * nrow(dataset))) 
+    idx <- setdiff(idx, idx_k[, k])
+  }
+    # Create idx2, being the index for the test data (1 fold)
+    # Create idx1, being the index for the training data (K-1 folds)
+    # Store the results of each lasso run in a vector called "mses"
+  idx2 <- idx_k[, 1]
+  idx1 <- setdiff(1:nrow(dataset), idx2)
+  mses <- lasso_slow(dataset, idx1, idx2) 
+  for (k in seq(2, K)) {
+    # Splits sample indices
+    idx2 <- idx_k[, k]
+    idx1 <- setdiff(seq(1, nrow(dataset)), idx2)
+    mses <- c(mses, lasso_slow(dataset, idx1, idx2)) }
+    # Average the resulting coefficients
+    summary_mse <- c(mean_mse = mean(mses), median_mse = median(mses),
+                     sd_mse = sd(mses))
+  
+    return(summary_mse) 
+  }
+  
+  # Run the function on the imported dataset
+  #results <- cv_lasso_slow(d)
+}, simplify = F)
+```
+
+Here, the function call is disabled because of its long runtime due to the inefficient code. Instead, the profiling results of a former run are shown below (as a screenshot due to the large size of the html object).
+
+![*Figure 1: Profiling results of the "slow code"*](Profiling.png)
+
+In total, the algorithm took **6,711,980 miliseconds (≈ 112 minutes)** which is set as the baseline for the subsequent code optimization. 
+Analysing the profiling results, the following major bottlenecks can be identified:
+
+1. Importing the data
+2. Preparing the covariate matrix for estimation
+3. Estimation of the lasso model (by far the the largest bottleneck!)
+4. Predicting the test set based on the trained model
+
+
+Based on the profiling, the subsequent code optimization will be structured into three steps (similarly to the inefficient code): 
+
+1. Data import [addressing bottleneck #01]
+2. `lasso_slow()` [addressing bottlenecks #02 - #04]
+3. `cv_lasso_slow()`
+
+
+## 1) Data import [addressing bottleneck #01]
+To start off, `read.csv()` might not be the most efficient method for loading the large dataset as also the profiling suggests room for improvement. Alternative, and arguably more efficient, functions include `fread()` from `{data.table}` and `vroom()` from the equally named package. In particular, `vroom()` offers the advantage of not storing all values but their locations instead and therefore, the data is only read when required. This is in particular beneficial in case of (longer) character data, which is the case for some columns of the dataset `beer_sales_brandlevel.csv`. Hence, the performances of these three methods are profiled and compared.
+
+**`read.csv()`**:
+
+```{r 01_readcsv, message = F, fig.height=10, echo = FALSE, warning=FALSE}
+profvis({
+  data1 <- read.csv("dff/beer_sales_brandlevel.csv", colClasses = c("brand" = "factor", "store" = "factor", "week" = "factor"))
+}, simplify = F)
+```
+
+**`fread()`**:
+
+```{r 01_fread, message = F, fig.height=10, echo = FALSE, warning=FALSE}
+profvis({
+  data2 <- fread("dff/beer_sales_brandlevel.csv", colClasses = c(brand = "factor", store = "factor", week = "factor"))
+}, simplify = F)
+```
+
+**`vroom()`**:
+
+```{r 01_vroom, message = F, fig.height=10, echo = FALSE, warning=FALSE}
+profvis({
+  data3 <- vroom("dff/beer_sales_brandlevel.csv", col_types = c(brand = "f", store = "f", week = "f"))
+}, simplify = F)
+```
+
+While `fread()` is already roughly five times faster than `read.csv()`, `vroom()` performs best by ultimately reducing the runtime by roughly 95%.
+In the remaining part of the optimization, this imported dataset (*data3*) is used due to this profiling result. Furthermore, it is converted into a data table since this class facilitates data reading, computations and aggregations (as can also be seen in exercise 2 later) and hence, this general efficient coding principle is applied.
+
+```{r dt, echo=TRUE, fig.height=10, message=FALSE, warning=FALSE}
+setDT(data3)
+```
+
+## 2) `lasso_slow()` [addressing bottlenecks #02 - #04]
+
+First, a subset of the data with 1,000 random observations is created such that the comparison of the slow and more efficient code can take place faster. This also means that even a small improvement when comparing the approaches for this subset will result in a larger speed improvement for the final dataset since this is roughly 620x larger. In this first step, the code profiling is taking place by comparing computation times (as `profivis()` is not feasible with such short run times), before the final optimized code is analyzed again with `profivis()`.
+
+In order to avoid errors when scaling the covariate matrix at a later stage, it is important that observations with values in the variable *sales_promo_coupon* unequal to zero are selected. Hence, 100 of these observations are explicitly included in the subset, also accounting for the five folds later on. The remaining 900 observations are sampled randomly ( controlled by a seed). Finally, the indexes are constructed such that there is a split into 70% training and 30% test set.
+
+```{r sample, echo=TRUE, fig.height=10, message=FALSE, warning=FALSE}
+set.seed(10)
+data_sub1 <- data3[sample(which(data3$sales_promo_coupon != 0), 100), ]
+data_sub2 <- data3[sales_promo_coupon == 0][sample(.N, 900)] 
+data_sub <- rbind(data_sub1, data_sub2)
+
+idx1 <- seq(1, 700)
+idx2 <- seq(701, 1000)
+```
+
+### 2.1) Slow
+In the following, the first part of `lasso_slow()` is shown and executed.
+
+```{r slow_steps11, echo=TRUE, fig.height=10, message=FALSE, warning=FALSE}
+lasso_slow_steps <- function(dataset, idx1, idx2) {
+  dataset$log_move_in_ounces <- log(dataset$move_in_ounces) 
+  dataset$log_price_per_ounce <- log(dataset$price_per_ounce)
+  
+  # Selecting variables to be used in the rest of the code
+  dataset <- subset(dataset, select = c(log_move_in_ounces, 
+                                        log_price_per_ounce,
+                                        sales_promo_bonus_buy,
+                                        sales_promo_price_reduc,
+                                        sales_promo_coupon,
+                                        sales_promo_unknown,
+                                        brand, store, week))
+  
+  form <- as.formula(paste("log_move_in_ounces ~ ",
+                         paste0(names(dataset)[-1], collapse = " + "), " - 1"))
+  
+  cov_matrix <- as.matrix(subset(dataset, select = c(log_price_per_ounce, 
+                                                     sales_promo_bonus_buy,
+                                                     sales_promo_price_reduc,
+                                                     sales_promo_coupon,
+                                                     sales_promo_unknown)))
+  
+  return(cov_matrix)
+}
+
+set.seed(22) # for reproducability
+system.time({
+  res1 <- lasso_slow_steps(data_sub, idx1, idx2)
+})
+```
+
+### 2.1) Improved
+While `lasso_slow_steps()` was already very fast, some general efficient coding principles suggest improvements in the code, which may quantify when executing the operations with a larger dataset. Since the dataset is of type `data.table` (as explained above), the construction of new variables and selection of certain other variables can be implemented in one step. 
+
+In addition, the general efficient coding principle applies that it is efficient to store data in a matrix whenever it contains only one data type. As this is given when constructing the covariate matrix (only numeric data), the command `as.matrix()` is used. Moreover, this matrix is transformed into a sparse matrix which requires even less memory space.
+
+Finally, the construction of the formula can be omitted at this point, because it can be denoted more efficiently directly in `model.matrix()` (more regarding that in the next step).
+
+```{r fast_steps11, echo=TRUE, fig.height=10, message=FALSE, warning=FALSE}
+lasso_fast_steps <- function(dataset, idx1, idx2) {
+  dataset <- dataset[, .(log_move_in_ounces = log(move_in_ounces), log_price_per_ounce = log(price_per_ounce),
+                    sales_promo_bonus_buy,  sales_promo_price_reduc, sales_promo_coupon, sales_promo_unknown, brand, store, week)]
+  
+  cov_matrix <- as(as.matrix(dataset[, .(log_price_per_ounce, sales_promo_bonus_buy,  sales_promo_price_reduc, sales_promo_coupon, sales_promo_unknown)]),
+                   "sparseMatrix") # matrix as only one data type
+  
+  return(cov_matrix)
+  }
+
+system.time({
+  res2 <- lasso_fast_steps(data_sub, idx1, idx2)
+})
+
+res1[1:5,]
+res2[1:5,]
+
+object_size(res1)
+object_size(res2)
+```
+
+First, it can be seen that both matrices yield the same numeric values for the first five rows which suggests that the improved version is equivalent to the slower one in terms of the numeric computations. While the gain in computation time is minor in absolute terms, the improved version only requires 25% of the time which again can be leveraged when using a significantly larger dataset. In addition, the storage in a sparse matrix reduced the size of the covariate matrix by 25% which also suggests an optimization in the code. Hence, the profiling result demonstrates the benefit of using this method of the initial slower alternative.
+
+
+### 2.2) Slow
+
+Now, the entire function `lasso_slow` is considered and executed as a baseline for optimization. Compared to the previous slow code, the lines after the one with the hashtags are added.
+
+```{r slow_steps12, echo=TRUE, fig.height=10, message=FALSE, warning=FALSE}
+lasso_slow <- function(dataset, idx1, idx2) {
+  dataset$log_move_in_ounces <- log(dataset$move_in_ounces) 
+  dataset$log_price_per_ounce <- log(dataset$price_per_ounce)
+  
+  # Selecting variables to be used in the rest of the code
+  dataset <- subset(dataset, select = c(log_move_in_ounces, 
+                                        log_price_per_ounce,
+                                        sales_promo_bonus_buy,
+                                        sales_promo_price_reduc,
+                                        sales_promo_coupon,
+                                        sales_promo_unknown,
+                                        brand, store, week))
+  
+  form <- as.formula(paste("log_move_in_ounces ~ ",
+                         paste0(names(dataset)[-1], collapse = " + "), " - 1"))
+  
+  cov_matrix <- as.matrix(subset(dataset, select = c(log_price_per_ounce, 
+                                                     sales_promo_bonus_buy,
+                                                     sales_promo_price_reduc,
+                                                     sales_promo_coupon,
+                                                     sales_promo_unknown)))
+   
+  ############################################################
+  
+  cov_scaled <- scale(cov_matrix,
+                      center = apply(cov_matrix[idx1,], 2, mean), 
+                      scale = apply(cov_matrix[idx1,], 2, sd))
+  
+  all_vars <- cbind(cov_scaled, dataset[, c("log_move_in_ounces", "brand", "store", "week")])
+  
+  covs_numeric_matrix <- model.matrix(form, all_vars)
+  print(object_size(covs_numeric_matrix))
+
+  lasso <- cv.glmnet(x = covs_numeric_matrix[idx1, ],
+                     y = all_vars$log_move_in_ounces[idx1], alpha = 1)
+  
+  Yhat <- as.numeric(predict(lasso, newx = covs_numeric_matrix[idx2, ]))
+  
+  Y_resid <- dataset$log_move_in_ounces[idx2] - Yhat
+  
+  mse_y <- mean(Y_resid^2) 
+  
+  return(mse_y)
+}
+
+set.seed(22)
+system.time({
+  res1 <- lasso_slow(data_sub, idx1, idx2)
+})
+```
+
+### 2.2) Improved
+
+Again, two general efficient coding principles and the results of the initial profiling suggest improvements in the code: 
+
+First, it is desirable to use vectorized functions whenever possible and applicable. This is the case here when calculating the column-wise means and standard deviations for scaling the covariate matrix.
+
+Second, representing factor variables as dummies can significantly increase the object size. This slows down the code because R stores workspace objects in the memory. As in this case, all variables are again of the same data type, it is preferable to store the data as a sparse matrix to reduce the memory space and to speed up computations. Hence, the lasso model is also trained using the sparse matrix compared to regular array in the slow code. This will speed up the large estimation time indicated in the initial profiling of the slow code. Similarly, the features of the test set which are used for prediction are also represented as a sparse matrix. In this way, the identified bottlenecks 2-4) are addressed.
+
+Also, as indicated above, the formula in `model.matrix()` does not need to be constructed beforehand by pasting all variable names. Instead, it is more efficient to directly include all remaining variables via the "**.**" in the formula.
+
+Finally, `as.numeric()` for the test predictions can be omitted since the output is a numeric value either way. In addition, the computation of the MSE can be expressed more compact in one line instead of first calculating the residual and then taking the mean of its square.
+
+```{r fast_steps12, echo=TRUE, fig.height=10, message=FALSE, warning=FALSE}
+lasso_fast <- function(dataset, idx1, idx2) {
+  dataset <- dataset[, .(log_move_in_ounces = log(move_in_ounces), log_price_per_ounce = log(price_per_ounce),
+                    sales_promo_bonus_buy,  sales_promo_price_reduc, sales_promo_coupon, sales_promo_unknown, brand, store, week)]
+  
+  cov_matrix <- as(as.matrix(dataset[, .(log_price_per_ounce, sales_promo_bonus_buy,  sales_promo_price_reduc, sales_promo_coupon, sales_promo_unknown)]),
+                   "sparseMatrix")
+  
+  ############################################################
+  
+  cov_scaled <- scale(cov_matrix,
+                      center = colMeans(cov_matrix[idx1,]), 
+                      scale = colSds(as.matrix(cov_matrix[idx1,])))
+  
+  all_vars <- cbind(cov_scaled, dataset[, c("log_move_in_ounces", "brand", "store", "week")])
+  
+  covs_numeric_matrix <- as(model.matrix(log_move_in_ounces ~ . - 1, all_vars), "sparseMatrix")
+  print(object_size(covs_numeric_matrix))
+
+  lasso <- cv.glmnet(x = covs_numeric_matrix[idx1, ], 
+                     y = all_vars$log_move_in_ounces[idx1], 
+                     alpha = 1)
+  
+  Yhat <- predict(lasso, newx = covs_numeric_matrix[idx2, ])
+  
+  mse_y <- mean((dataset$log_move_in_ounces[idx2] - Yhat)^2) 
+  
+  return(mse_y)
+}
+
+set.seed(22)
+system.time({
+  res2 <- lasso_fast(data_sub, idx1, idx2)
+})
+
+res1
+res2
+```
+
+Both approaches return the same MSE for the selected data subset which shows the equivalence in terms of computations. However, the improved variant requires roughly 10x less time. A major reason for this significant speed up is the reduction of the size of the numeric covariate matrix by roughly 95%. Therefore, the profiling result supports using this improved function compared to the initially proposed one.
+
+
+## 3) `cv_lasso_slow()`
+
+In order to improve the code here, the estimation steps are commented out since these are already optimized by defining `lasso_fast()` above.
+
+### 3.1) Slow
+
+First the slow code is executed and timed.
+
+```{r slow_steps2, echo=TRUE, fig.height=10, message=FALSE, warning=FALSE}
+cv_lasso_slow <- function(dataset, K = 5) {
+  # Generate indices for K folds. The object should have K columns, each
+  # corresponding to the row indices for one fold. Each observation should appear # in one fold and one fold only
+  idx <- seq(1, nrow(dataset))
+  idx_k <- sample(idx, 1/K * nrow(dataset))
+  idx <- setdiff(idx, idx_k)
+  
+  for (k in seq(2, K)) {
+    idx_k <- cbind(idx_k, sample(idx, 1/K * nrow(dataset))) 
+    idx <- setdiff(idx, idx_k[, k])
+  }
+  
+  # Create idx2, being the index for the test data (1 fold)
+  # Create idx1, being the index for the training data (K-1 folds)
+  # Store the results of each lasso run in a vector called "mses"
+  idx2 <- idx_k[, 1]
+  idx1 <- setdiff(1:nrow(dataset), idx2)
+  #mses <- lasso_fast(dataset, idx1, idx2) 
+  
+  for (k in seq(2, K)) {
+    # Splits sample indices
+    idx2 <- idx_k[, k]
+    idx1 <- setdiff(seq(1, nrow(dataset)), idx2)
+    #mses <- c(mses, lasso_fast(dataset, idx1, idx2)) 
+  }
+  
+  # Average the resulting coefficients
+  #summary_mse <- c(mean_mse = mean(mses), 
+  #                 median_mse = median(mses),
+  #                 sd_mse = sd(mses))
+  
+  #return(summary_mse) 
+}
+
+set.seed(22)
+system.time({
+  res1 <- cv_lasso_slow(data3)
+})
+```
+
+### 3.2) Improved
+
+Again, the computation time is not too large in absolute terms, however, general efficient coding principles suggest improvements for the code. 
+
+This includes vectorizing the operation of generating the indices for the different folds by randomly shuffling and dividing the indices of the datasets into five columns (-> *folds*) in a matrix. In this way, the iterative looping and sampling from the still available indices (determined via set differences) can be avoided which is computationally more efficient. 
+
+Furthermore, the vector containing the MSEs for the different folds is initialized such that the vector is not growing each iteration. This is more efficient with regard to memory allocation.
+
+Finally, the indices for the training (testing) set are determined via (negative) indexing and hence, the computationally more expensive set differences can be avoided.
+
+```{r fast_steps2, echo=TRUE, fig.height=10, message=FALSE, warning=FALSE}
+cv_lasso_fast <- function(dataset, K = 5) {
+  id <- sample(nrow(dataset), nrow(dataset), replace = F)
+  idx_k <- matrix(id, ncol = 5, byrow = TRUE)
+  
+  mses <- rep(NA, K)
+  
+  for (k in seq(1, K)) {
+    idx2 <- idx_k[, k]
+    idx1 <- as.vector(idx_k[, -k])
+    #mses[k] <- lasso_fast(dataset, idx1, idx2)
+  }
+
+  #summary_mse <- c(mean_mse = mean(mses), 
+  #                 median_mse = median(mses),
+  #                 sd_mse = sd(mses))
+  
+  #return(summary_mse) 
+}
+
+system.time({
+  cv_lasso_fast(data3)
+})
+```
+
+Running this optimized vectorized version shows improvements in run time by the factor five. Hence, profiling shows that this method should be used instead of the slow alternative.
+
+
+## 4) Final comparison
+
+Based on the previously argued improvements, the entire optimized version is profiled for the entire dataset to compare its final performance to the initial slow code.
+
+```{r 01_final, echo=TRUE, fig.height=10, message=FALSE, warning=FALSE}
+profvis({
+  data3 <- vroom("dff/beer_sales_brandlevel.csv", col_types = c(brand = "f", store = "f", week = "f"))
+  setDT(data3)
+  
+  lasso_fast <- function(dataset, idx1, idx2) {
+    dataset <- dataset[, .(log_move_in_ounces = log(move_in_ounces), log_price_per_ounce = log(price_per_ounce),
+                      sales_promo_bonus_buy,  sales_promo_price_reduc, sales_promo_coupon, sales_promo_unknown, brand, store, week)]
+    
+    cov_matrix <- as(as.matrix(dataset[, .(log_price_per_ounce, sales_promo_bonus_buy,  sales_promo_price_reduc, sales_promo_coupon, sales_promo_unknown)]),
+                     "sparseMatrix")
+  
+    cov_scaled <- scale(cov_matrix,
+                        center = colMeans(cov_matrix[idx1,]), 
+                        scale = colSds(as.matrix(cov_matrix[idx1,])))
+    
+    all_vars <- cbind(cov_scaled, dataset[, c("log_move_in_ounces", "brand", "store", "week")])
+    
+    covs_numeric_matrix <- as(model.matrix(log_move_in_ounces ~ . - 1, all_vars), "sparseMatrix")
+  
+    lasso <- cv.glmnet(x = covs_numeric_matrix[idx1, ], 
+                       y = all_vars$log_move_in_ounces[idx1], 
+                       alpha = 1)
+    
+    Yhat <- predict(lasso, newx = covs_numeric_matrix[idx2, ])
+    
+    mse_y <- mean((dataset$log_move_in_ounces[idx2] - Yhat)^2) 
+    
+    return(mse_y)
+  }
+  
+  cv_lasso_fast <- function(dataset, K = 5) {
+    id <- sample(nrow(dataset), nrow(dataset), replace = F)
+    idx_k <- matrix(id, ncol = 5, byrow = TRUE)
+    
+    mses <- rep(NA, K)
+    
+    for (k in seq(1, K)) {
+      idx2 <- idx_k[, k]
+      idx1 <- as.vector(idx_k[, -k])
+      mses[k] <- lasso_fast(dataset, idx1, idx2)
+    }
+  
+    summary_mse <- c(mean_mse = mean(mses), 
+                     median_mse = median(mses),
+                     sd_mse = sd(mses))
+    
+    return(summary_mse) 
+  }
+  
+  set.seed(22)
+  res <- cv_lasso_fast(data3)
+}, simplify = F)
+
+res
+```
+
+Hence, the optimized code returns the result as desired (vector containing the mean, median, and standard deviation of the MSE in the five iterations). Still, the major bottleneck is the lasso estimation which is not surprising given the required internal computations for this operation with such a large dataset. However, it can be seen that the final optimized version requires roughly 95% less computation time compared to the initial slow code (approximately five against 122 minutes) which denotes a significant improvement. Therefore, the profiling results show the gain in efficiency when using this approach compared to the initial one.
+
+
+# Exercise 2: Data manipulation with fast packages
+
+> Profile your code. Compare the different approaches. Which operations are faster in `{data.table}`, which in the `{tidyverse}`? Summarize your findings in a list or table. Make sure to still keep using good practices for efficient/optimized code. In the case of `{data.table}`, use the concepts of chaining, referencing, etc. whenever feasible and appropriate.
+
+In this part, the two packages `{tidyverse}` and `{data.table}` are compared regarding their performance on specific tasks including importing and data manipulation. This is done by implementing each of the six steps with both packages and contrasting the respective profiling results.
+
+## 1. Data Import
+
+In the first task, the two data sets *upcs_beer.csv* and *wber.csv* are imported such that the variables *upc*, *sale*, *store*, and *brand* are factors and all variable names are in lowercase.
+
+### `{tidyverse}`
+
+```{r 02_01, echo=TRUE}
+profvis({
+  upcs_beer_tv <- read_csv("dff/upcs_beer.csv",
+                         col_types = cols(upc = col_factor(levels = NULL), brand = col_factor(levels = NULL))) %>% 
+    rename_all(tolower)
+  str(upcs_beer_tv)
+  
+  wber_tv <- read_csv("dff/wber.csv",
+                    col_types = cols(UPC = col_factor(levels = NULL), SALE = col_factor(levels = NULL), STORE = col_factor(levels = NULL))) %>% 
+    rename_all(tolower)
+  str(wber_tv)
+}, simplify = F)
+```
+
+### `{data.table}`
+
+```{r 02_01_2, echo=TRUE}
+profvis({
+  upcs_beer_dt <- fread("dff/upcs_beer.csv", colClasses = c("upc" = "factor", "brand" = "factor"))
+  setnames(upcs_beer_dt, tolower(names(upcs_beer_dt)))
+  str(upcs_beer_dt)
+  
+  wber_dt <- fread("dff/wber.csv", colClasses = c("UPC" = "factor", "SALE" = "factor", "STORE" = "factor"))
+  setnames(wber_dt, tolower(names(wber_dt)))
+  str(wber_dt)
+}, simplify = F)
+```
+
+Hence, in this case, it can be seen that both approaches yield the desired results while using `{data.table}` led to a significant improvement in performance (roughly 10x faster).
+
+
+## 2. Manipulation on the wber dataset
+
+In the second step, manipulation operations on the larger of the two datasets (*wber*) take place which include renaming, creating dummy variables and removing certain observations and variables.
+
+### `{tidyverse}`
+
+```{r 02_02, echo=TRUE}
+profvis({
+  wber_tv2 <- wber_tv %>%
+    filter(!(ok == 0 | price <= 0 | move <= 0)) %>%
+    rename(sales_promotion = sale) 
+
+  wber_tv2 <- {if(class(wber_tv2$sales_promotion) == "factor") 
+    unnest(wber_tv2, sales_promotion) %>%
+      mutate(new = 1) %>% 
+      spread(sales_promotion, new, fill = 0) 
+    else .} %>%
+    dplyr::select(!c("ok", "price_hex", "profit_hex"))
+}, simplify = F)
+```
+The major bottleneck in this subtask is the construction of the dummy variables. Here, an alternative (non-`{tidyverse}`) method could have been to use `model.matrix()`.
+
+### `{data.table}`
+
+```{r 02_02_2, echo=TRUE}
+profvis({
+  wber_dt2 <- wber_dt[(wber_dt$ok != 0 & wber_dt$price > 0 & wber_dt$move > 0), ]
+  setnames(wber_dt2, "sale", "sales_promotion")
+  {if(class(wber_dt2$sales_promotion) == "factor") 
+    wber_dt2 <- dcast(wber_dt2[, r := .I], r + store + upc + week + move + qty + price + profit ~ sales_promotion, fun = length)[, r := NULL]
+    }
+}, simplify = F)
+
+head(wber_tv2)
+head(wber_dt2)
+```
+
+Again, both approaches lead to the same results, while `{data.table}` executes the commands considerably (roughly 10x) faster.
+
+
+## 3. Join and further manipulation
+
+Third, the two datasets are joined and two additional variables (*price_per_ounce* and *move_in_ounces*) are created. Finally, specific problematic observations are removed from the dataset.
+
+For the creation of the two variables, it is assumed that *size_ounces* denotes the size in ounces for one unit (move).
+
+Considering the structure of the two datasets in subtask 1, it can be seen that the appropriate key for joining is *upc*.
+
+### `{tidyverse}`
+
+```{r 02_03, echo=TRUE}
+profvis({
+  beers_tv <- inner_join(upcs_beer_tv, wber_tv2, by = "upc")  %>% 
+    mutate(price_per_ounce = (price/qty)/size_ounces) %>%  # price per unit / ounces per unit
+    mutate(move_in_ounces = move*size_ounces) %>%
+    filter(!(brand == "miller" & week >= 318))
+}, simplify = F)
+```
+
+### `{data.table}`
+
+```{r 02_03_2, echo = T}
+profvis({
+  beers_dt <- upcs_beer_dt[wber_dt2, on = .(upc), nomatch = 0][, `:=`(price_per_ounce = (price/(qty*size_ounces)), move_in_ounces =  move*size_ounces)][!(brand == "miller" & week >= 318), ]
+}, simplify = F)
+
+head(beers_tv)
+head(beers_dt)
+```
+
+Both packages yielding the same results, `{tidyverse}` (`{dplyr}`, specifically) is in this case more efficient since both require for the operations almost the same time, but the `{tidyverse}` method needs only roughly half the memory.
+
+
+## 4. Some descriptive statistics
+
+Next, descriptive statistics are calculated for certain subsets of the joined dataframe *beers*. Concerning the filtering for observations between two values, "between" is considered inclusive.
+
+### `{tidyverse}`
+
+```{r 02_04, echo=TRUE}
+profvis({
+  ds1_tv <- beers_tv %>% 
+    mutate(light_beer = str_count(descrip, "light|lite")) %>%
+    summarise(count_light_beer = count(light_beer))
+  
+  ds2_tv <- beers_tv %>% 
+    mutate(light_beer = str_count(descrip, "light|lite")) %>%
+    group_by(brand) %>%
+    summarize(n = count(light_beer)) %>%
+    arrange(desc(n)) %>%
+    head(., 3)
+  
+  ds3_tv <- beers_tv %>% 
+    filter(move_in_ounces >= 0 & move_in_ounces <= 1000) %>%
+    summarize(mean_price = mean(price_per_ounce),
+              mean_move = mean(move_in_ounces))
+    
+  ds4_tv <- beers_tv %>% 
+    filter(move_in_ounces >= 0 & move_in_ounces <= 1000) %>%
+    group_by(brand) %>%
+    summarize(mean_price = mean(price_per_ounce),
+              mean_move = mean(move_in_ounces)) %>%
+    arrange(desc(mean_move))
+  
+  ds5_tv <- beers_tv %>% 
+    group_by(upc) %>%
+    summarize(sum_move = sum(move),
+              descr = unique(descrip)) %>%
+    arrange(desc(sum_move)) %>%
+    head(., 10)
+  
+  ds6_tv <- beers_tv %>%
+    group_by(store) %>%
+    summarise(unique_brands = n_distinct(brand)) %>%   
+    arrange(desc(unique_brands)) %>%
+    head(., 1)
+}, simplify = F)
+```
+
+### `{data.table}`
+
+```{r 02_04_2, echo=TRUE}
+profvis({
+  ds1_dt <- beers_dt[descrip %like% "light|lite", .N]
+
+  ds2_dt <- beers_dt[descrip %like% "light|lite", .N, by = brand][order(-N)][1:3]
+  
+  ds3_dt <- beers_dt[move_in_ounces %between% c(0, 1000), .(mean_price = mean(price_per_ounce), mean_move =  mean(move_in_ounces))]
+
+  ds4_dt <- beers_dt[move_in_ounces %between% c(0, 1000), .(mean_price = mean(price_per_ounce), mean_move =  mean(move_in_ounces)), by = brand][order(-mean_move)]
+  
+  ds5_dt <- beers_dt[, .(sum_move = sum(move), descr = unique(descrip)), by = upc][order(-sum_move)][1:10]
+  
+  ds6_dt <- beers_dt[, .(n_brands = uniqueN(brand)), by = store][order(-n_brands)][1]
+  
+}, simplify = F)
+```
+Before interpreting the profiling results, one has to verify that both approaches yield the same output. For the fourth task, only the ten brands with the highest *mean_move* are returned.
+
+```{r 02_04_03, echo=TRUE}
+ds1_tv
+ds1_dt
+
+ds2_tv
+ds2_dt
+
+ds3_tv
+ds3_dt
+
+ds4_tv[1:10,]
+ds4_dt[1:10,]
+
+ds5_tv
+ds5_dt
+
+ds6_tv
+ds6_dt
+```
+
+Again, both approaches yield the same output, however, mixed results with regard to the performance can be observed. While `{tidyverse}` is faster at analyzing string patterns (the first two subtasks), `{data.table}` requires less time when filtering for specific conditions and subsequently calculating summary statistics (subtasks 3-6). For the very last subtask, no significant difference in performance can be identified.
+
+
+## 5. Aggregation
+
+Fifth, the data is aggregated from *upc* (individual) to *brand* (group) level such that there exists unique combinations of *brand*, *store* and *week*.
+
+### `{tidyverse}`
+
+```{r 02_05, echo=TRUE}
+profvis({
+beers_agg_tv <- beers_tv %>%
+  group_by(brand, store, week) %>%
+  summarise(move_in_ounces = sum(move_in_ounces, na.rm = T),
+            price_per_ounce = mean(price_per_ounce, na.rm = T),
+            B = mean(B, na.rm = T),
+            S = mean(S, na.rm = T),
+            C = mean(C, na.rm = T),
+            .groups = 'keep')
+}, simplify = F)
+
+uniqueN(beers_agg_tv, c('brand','store','week')) == nrow(beers_agg_tv)  
+```
+
+### `{data.table}`
+
+```{r 02_05_2, echo=TRUE}
+profvis({
+beers_agg_dt <- beers_dt[, .(move_in_ounces = sum(move_in_ounces, na.rm = T),
+                                price_per_ounce = mean(price_per_ounce, na.rm = T),
+                                B = mean(B, na.rm = T),
+                                S = mean(S, na.rm = T),
+                                C = mean(C, na.rm = T)),
+                         by = .(brand, store, week)]
+}, simplify = F)
+
+uniqueN(beers_agg_dt, c('brand','store','week')) == nrow(beers_agg_dt)  
+```
+
+With both approaches leading to unique combinations of the required variables, `{data.table}` performs this operation roughly 20x faster than `{tidyverse}`.
+
+
+## 6. Estimate price elasticities
+
+Finally, the aggregated dataset is used for estimation including fixed effects. While `lfe::felm()` will be used in the `{tidyverse}` workflow, `fixest::feols()` will be considered in the `{data.table}` workflow. For this package, [current benchmarks](https://github.com/lrberge/fixest#benchmarking) suggest gains in performance (in particular for large datasets) due to the implementation of a concentrated maximum likelihood method to efficiently estimate models with an arbitrary number of fixed effects.
+
+### `lfe::felm()` (in place of `{tidyverse}`)
+
+```{r 02_06, echo=TRUE}
+profvis({
+  m_tv <- felm(log(move_in_ounces) ~ log(price_per_ounce) + S + B + C | as.factor(week) + store + brand, data = beers_agg_tv) 
+}, simplify = F)
+```
+
+### `fixest::feols()` (in place of `{data.table}`)
+
+```{r 02_06_2, echo=TRUE}
+profvis({
+  m_dt <- feols(log(move_in_ounces) ~ log(price_per_ounce) + S + B + C | as.factor(week) + store + brand, data = beers_agg_dt)
+}, simplify = F)
+
+m_tv$coefficients
+m_dt$coefficients
+```
+
+With regard to the estimation, both packages yield the same regression coefficients. However, `fixest::feols()` requires roughly half of the time and four times less memory for the estimation than `lfe::felm()`. This demonstrates its superior performance in this use case.
+
+## Table of comparisons
+
+Overall, the results (run time) of the six subtasks can be summarized in the following table. 
+
+(*Note: these numbers are from a previous run, so when knitting the R code again, the final run times might slightly deviate*)
+
+Task | `{tidyverse}` | `{data.table}` | Note
+-------------------- | ------------- | -------------
+1. Import | 20.71 sec.| **2.77 sec.** |
+2. Manipulation | 54.81 sec. | **5.87 sec.** |
+3. Join & Manipulation | **0.21 sec.** | 0.23 sec. |
+4. Descriptive Statistics | **1.6 sec.** | 1.94 sec. | *each performing better at different subtasks*
+5. Aggregation | 18.15 sec. | **0.87 sec.** |
+6. Estimation | 1.85 sec. | **0.88 sec.** |
+
+Hence, it can be concluded that `{data.table}` is not performing superior in every single task, however, generally performs operations faster than `{tidyverse}`.
