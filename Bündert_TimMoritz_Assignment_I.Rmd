@@ -4,7 +4,7 @@ author: "Submitted by Tim-Moritz Bündert (Student ID: 5635975)"
 date: "May 16, 2021"
 output: 
   html_document:
-    keep_md: true
+    toc: true
 ---
 
 ```{r setup, include=FALSE}
