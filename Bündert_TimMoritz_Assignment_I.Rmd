@@ -2,9 +2,7 @@
 title: "Assignment I: Code profiling, optimization, {data.table} "
 author: "Submitted by Tim-Moritz Bündert (Student ID: 5635975)"
 date: "May 16, 2021"
-output: 
-  html_document:
-    toc: true
+output: github_document
 ---
 
 ```{r setup, include=FALSE}
