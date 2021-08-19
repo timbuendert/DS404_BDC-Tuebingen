@@ -1,0 +1,3791 @@
+---
+title: "Assignment IV: Remote computing"
+author: "Submitted by Tim-Moritz Bündert (Student ID: 5635975)"
+date: "July 25, 2021"
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I hereby assure that my submission is in line with the *Examination and Assessment Honor Code* outlined on the lecture slides and below:
+
+### Examination and Assessment Honor Code
+
+All members of the School of Business and Economics at the University of Tübingen (faculty, students, and alumni) share a commitment to honesty and integrity. In particular, all members follow the standards of scholarship and professionalism in all examinations and assessments.
+
+By submitting these assignments, students agree to comply with this Examination and Assessment Honor Code.
+
+Students who violate this Honor Code are in breach of this agreement and are subject to sanctions imposed by the School of Business and Economics, the University and its responsible bodies (e.g., the board of examiners (“Prüfungsausschuss”)).
+
+1. All members of the School of Business and Economics at the University of Tübingen (faculty, students, and alumni) have the obligation to report known violations to the responsible bodies (e.g., the board of examiners (“Prüfungsausschuss”) or the Dean of Programs)
+2. You must not represent another’s work as your own
+3. You must not receive inadmissible assistance of any sort before, during, or after an examination or other forms of course work that is subject to assessment by faculty members
+4. You must not provide inadmissible assistance of any sort before, during, or after an examination or other forms of course work that is subject to assessment by faculty members
+5. Violations of this Honor Code will be handled according to the rules and regulations laid out in the rules for this course
+
+
+## General setup
+
+Before I start the project, I install (if necessary) and load the packages that are needed for the assignment.
+
+```{r script_header, message=FALSE, warning = FALSE}
+# Check if packages have been installed before; if not, install them
+if (!require("MASS")) install.packages("MASS"); library(MASS)
+if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+if (!require("parallel")) install.packages("parallel"); library(parallel)
+if (!require("foreach")) install.packages("foreach"); library(foreach)
+if (!require("doParallel")) install.packages("doParallel"); library(doParallel)
+if (!require("future")) install.packages("future"); library(future)
+if (!require("future.apply")) install.packages("future.apply"); library(future.apply)
+if (!require("doRNG")) install.packages("doRNG"); library(doRNG)
+if (!require("sparklyr")) install.packages("sparklyr"); library(sparklyr)
+if (!require("dplyr")) install.packages("dplyr"); library(dplyr)
+if (!require("dbplot")) install.packages("dbplot"); library(dbplot)
+```
+
+Next, I make my hardware and software specs transparent:
+
+```{r specs}
+sessionInfo()
+Sys.info()                              # Operating system
+parallel::detectCores(logical = FALSE)  # CPU cores
+benchmarkme::get_ram()                  # RAM
+```
+
+# Exercise 1: Running RStudio Server in the bwCloud
+> Install and set up RStudio Server on your personal virtual machine in the bwCloud.
+
+First, a RStudio Server is set up on my virtual machine in the bwCloud and the user **jonathanfuhr** with the corresponding password **BDC2021** and restricted permissions is created. The server can be accessed via http://193.196.55.154:8787/.
+
+# Exercise 2: Running a Shiny Server in the bwCloud
+> Install and set up Shiny Server on your personal virtual machine in the bwCloud
+
+Next, similar to exercise 1, a Shiny server is set up on my virtual machine in the bwCloud. There, a sample RShiny app is uploaded which displays time series of different economic variables in the US, such as the personal consumption expenditures (*pce*) ^[ggplot2, US economics time series, https://ggplot2.tidyverse.org/reference/economics.html, accessed on July 17, 2021]. This app can be accessed via http://193.196.55.154:3838/EconApp.
+
+In a second step, a R Markdown file (*example_rmd_document.Rmd* from ILIAS) is also uploaded to the Shiny server and rendered into a HTML version. The knitted document can be accessed via http://193.196.55.154:3838/rmd/example_rmd_document.Rmd.
+
+# Exercise 3: Memory-efficient computing on the cluster
+> Write and execute two R scripts on the cluster. For each submitted batch script, include the batch script (.sh), the .out-file, and the .Rout-file as code in your .Rmd / .html assignment submission.
+
+In this exercise, two tasks (merging and modeling) working on Taxi data are performed using the bwUniCluster.
+
+## Merging
+
+First, the two datasets *trip_data_1.csv* and *trip_fare_1.csv* are loaded using `data.table::fread()` and then merged using an inner join (`data.table::merge()`) on the columns that both datasets have in common. Finally, the resulting merged dataset is written to disk using `data.table::fwrite()`. These operations can be seen in the following *.Rout* file resulting from the execution on the cluster.
+
+```{r 3_1_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> library(data.table)
+> 
+> trip_data_1 <- fread(file = "trip_data_1.csv", sep = ",", header = TRUE)
+> trip_fare_1 <- fread(file = "trip_fare_1.csv", sep = ",", header = TRUE)
+> 
+> merged_data <- merge(trip_data_1, trip_fare_1, by = c("medallion", "pickup_datetime", "vendor_id", "hack_license"), all.x = FALSE, all.y = FALSE) # inner join
+> 
+> fwrite(merged_data, "merged_data.csv")
+> 
+> proc.time()
+   user  system elapsed 
+ 78.722  10.594  94.136 
+```
+
+This script was executed by submitting the following batch script which specified the number of cores, memory and time to be allocated to this task.
+
+```{r 3_1_batch, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=merge.job
+#SBATCH --output=merge.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=5800mb
+#SBATCH --time=00:10:30
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module
+module load math/R/3.6.3
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore merge.R
+```
+
+Evaluating the memory and time usage, the corresponding *.out* file can be analyzed.
+
+```{r 3_1_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore merge.R"
+	User time (seconds): 531.67
+	System time (seconds): 20.11
+	Percent of CPU this job got: 98%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 9:18.32
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 5487284
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 2661545
+	Voluntary context switches: 757
+	Involuntary context switches: 3186
+	Swaps: 0
+	File system inputs: 2448336
+	File system outputs: 9111304
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n365
+Job ID: 19649013
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 2
+CPU Utilized: 00:09:12
+CPU Efficiency: 47.10% of 00:19:32 core-walltime
+Job Wall-clock time: 00:09:46
+Memory Utilized: 5.09 GB
+Memory Efficiency: 89.87% of 5.66 GB
+```
+
+Here, it can be seen that both the time and memory efficiency were very high with close to optimal requested resources.
+
+## Modeling
+
+In the second step, this merged dataset is used for modeling. Specifically, the variable *tip_amount* is linearly regressed on the predictors *trip_distance*, *passenger_count*, *fare_amount*, *payment_type*, *trip_time_in_secs* while controlling for the variable *hack_license* with fixed effects. This is implemented using `fixest:feols()` which has shown to perform linear regressions very efficiently (seen e.g. in assignment I). Based on the computed model, two questions are investigated, as can be seen in the following *.Rout* file
+
+```{r 3_2_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> library(data.table)
+> library(fixest)
+fixest 0.9.0, BREAKING changes! (Permanently remove this message with fixest_startup_msg(FALSE).) 
+- In i():
+    + the first two arguments have been swapped! Now it is i(factor_var, continuous_var) for interactions. 
+    + argument 'drop' has been removed (put everything in 'ref' now).
+- In feglm(): 
+    + the default family becomes 'gaussian' to be in line with glm(). Hence, for Poisson estimations, please use fepois() instead.
+> 
+> data <- fread("merged_data.csv", header = T)
+> 
+> model_df <- feols(tip_amount ~ trip_distance + passenger_count + fare_amount + payment_type + trip_time_in_secs | as.factor(hack_license), 
++                   data = data)
+> 
+> estimates <- coef(model_df)
+> print(estimates["passenger_count"])
+passenger_count 
+    -0.01446085 
+> print(estimates[grep("^payment_type*", names(estimates))])
+payment_typeCSH payment_typeDIS payment_typeNOC payment_typeUNK 
+     -2.2272522      -2.4498850      -2.3162585       0.4090813 
+> 
+> proc.time()
+   user  system elapsed 
+ 29.820   7.030  39.473
+```
+
+First, it can be seen that the passenger count is negatively related to the tip amount with the coefficient *0.01446085* which shows that few passengers tend to tip more than a larger number of passengers.
+
+Second, the coefficients for the different payment types are retrieved using regular expressions. Here, it can be identified that only the payment type *UNK* is positively associated with the tip amount (coefficient: *0.4090813*) and therefore, it also entails the largest tip amount.
+
+This script was executed using the following batch script and requested resources.
+
+```{r 3_2_batch, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=modeling.job
+#SBATCH --output=modeling.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=6000mb
+#SBATCH --time=00:05:00
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module
+module load math/R/3.6.3
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore modeling.R
+```
+
+Again, it can be evaluated how efficient the usage of the allocated resources for the job was.
+
+```{r 3_2_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore modeling.R"
+	User time (seconds): 229.71
+	System time (seconds): 11.22
+	Percent of CPU this job got: 98%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 4:04.51
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 6106088
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3156366
+	Voluntary context switches: 911
+	Involuntary context switches: 689
+	Swaps: 0
+	File system inputs: 1441272
+	File system outputs: 2527992
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n365
+Job ID: 19648997
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 2
+CPU Utilized: 00:04:01
+CPU Efficiency: 44.63% of 00:09:00 core-walltime
+Job Wall-clock time: 00:04:30
+Memory Utilized: 5.72 GB
+Memory Efficiency: 97.63% of 5.86 GB
+```
+
+Both CPU and memory efficiency were very high indicating very good resource allocation.
+
+# Exercise 4: Parallel computing on the cluster
+> Reuse Task 1 of Assignment III (the comparison of prediction methods on simulated data), but now with the help of cluster computing.
+
+In task 1 of Assignment III, the predictive accuracy of different machine learning methods on 100 different simulated datasets was compared and evaluated using both sequential and parallel execution with different R frameworks. This task will now be reused with cluster computing.
+
+First, the function `generate_data()` is sourced such that it can be subsequently used to simulate the data.
+
+```{r 1_source, echo=TRUE}
+source("generate_data.R")
+```
+
+As the next step, a function is defined which executes the desired workflow and can be called repetitively in the following. There, a matrix containing the respective MSE results is initialized and the data for the iteration is generated by calling the previously sourced function `generate_data()`. Then, the classifiers (linear and lasso regression, random forest, XGBoost) are trained on the training and evaluated using the test set. Finally, the MSE results are stored in the data frame which will be returned.
+
+```{r 1_function, echo=TRUE}
+ML_predictions <- function(trial) {
+  MSE_matrix <- data.frame(lm = double(1),
+                           glmnet = double(1),
+                           randomForest = double(1),
+                           xgboost = double(1))
+  
+  data <- generate_data()
+  train_data <- data$train
+  test_data <- data$test
+    
+  # lm
+  m_lm <- lm(outcome ~ ., train_data)
+  p_lm <- predict(m_lm, newdata = test_data) 
+  mse_lm <- mean((p_lm - test_data$outcome)^2)
+  MSE_matrix$lm[1] <- mse_lm
+  
+  # glmnet
+  m_glm <- glmnet(x = as.matrix(train_data[-1]), y = train_data$outcome)
+  p_glm <- predict(m_glm, newx = as.matrix(test_data[-1])) 
+  mse_glm <- mean((p_glm - test_data$outcome)^2)
+  MSE_matrix$glmnet[1] <- mse_glm
+    
+  # randomForest
+  m_rf <- randomForest(outcome ~ ., data = train_data)
+  p_rf <- predict(m_rf, newdata = test_data) 
+  mse_rf <- mean((p_rf - test_data$outcome)^2)
+  MSE_matrix$randomForest[1] <- mse_rf
+    
+  # xgboost
+  data_xgb = xgb.DMatrix(data = as.matrix(train_data[-1]), label = train_data$outcome)
+  m_xgb <- xgboost(data = data_xgb, nrounds = 100, verbose = F)
+  p_xgb <- predict(m_xgb, newdata = as.matrix(test_data[-1])) 
+  mse_xgb <- mean((p_xgb - test_data$outcome)^2)
+  MSE_matrix$xgboost[1] <- mse_xgb
+  
+  return(as.matrix(MSE_matrix))
+}
+```
+
+In addition, the number of trials for which this function should be executed is defined (`trials`).
+
+```{r 1_trials, echo=TRUE}
+trials <- 1:100
+```
+
+
+## 1. Sequential simulations
+
+First, the task at hand it executed sequentially, both locally and on the cluster. For this task, the function `sapply()` as well as the three parallel frameworks (specifying sequential computing) are implemented. Here (and in all of the remaining parts of this exercise), the base approaches (not including chunking, load balancing etc.) of the respective parallel frameworks are used to be able to better compare them.
+
+### Execution on local machine
+
+#### `sapply()`
+
+Using the previously defined function `ML_predictions()`, the workflow is executed sequentially 100 times using `sapply()`. Essentially, this operation could also be implemented by looping through the algorithm 100 times, however, using the function is more convenient and also needed for the upcoming approaches. To ensure reproducibility, the function `set.seed()` is implemented and the means of the methods across the 100 trials are printed.
+
+```{r 1_sequentially, echo=TRUE}
+system.time({
+  set.seed(42)
+  res_seq <- sapply(trials, ML_predictions)
+})
+
+print(rowMeans(res_seq))
+```
+
+Hence, it can be seen that the ensemble methods random forest and XGBoost perform significantly better than the linear and lasso regression method.
+
+
+#### `{parallel}`
+
+Implementing the workflow using `{parallel}`, a cluster of only a single core is initialized which corresponds to sequential computing. Next, it is ensured that the results are reproducible by setting `clusterSetRNGStream()` on this created cluster. Next, the R-packages and functions necessary for the workflow are exported to the worker. Finally, `parallel::parSapply()` is used to implement the workflow for the pre-specified number of trials (100). Again, the average MSEs are printed.
+
+```{r 1_parallel, echo=TRUE}
+system.time({
+  cls <- makeCluster(1)
+  clusterSetRNGStream(cls, iseed = 42)
+  
+  clusterEvalQ(cls, {
+    library(glmnet) 
+    library(randomForest) 
+    library(xgboost)
+    })
+  
+  # export functions
+  clusterExport(cls, c("generate_data", "ML_predictions")) 
+  
+  results <- parSapply(cls, trials, ML_predictions)
+  stopCluster(cls)
+})
+
+print(rowMeans(results))
+```
+
+A result similar to the one of the previous approach can be identified where the ensemble methods lead to significantly better results than the regression techniques. 
+
+#### `{foreach}` 
+
+Next, the same operation is implemented using `{foreach}`. For this purpose, `%do%` is used to compute sequentially and a random seed is set to ensure reproducibility. Then, `foreach::foreach()` is used to execute the workflow the desired number of times while specifying the way of combining results (`rbind`) and exporting the required packages.
+
+```{r 1_foreach, echo=TRUE}
+system.time({
+  registerDoRNG(123) 
+  result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %do% ML_predictions(trial)
+})
+
+colMeans(result)
+```
+
+Hence, similar results to the ones obtained in the previous approaches can be observed.
+
+#### `{future}` 
+
+Finally, the same operation is executed using the `{future}` framework. This is done by setting a sequential plan and calling the apply variant of this framework (`future_apply::future_sapply()`) for the pre-specified number of times on the function `ML_predictions()`. With the option `future.seed`, it can be ensured that the results are reproducible.
+
+```{r 1_future, echo=TRUE}
+system.time({
+  plan(sequential)
+  x <- future_sapply(trials, ML_predictions, future.seed = 43)
+})
+
+rowMeans(x)
+```
+
+Again, similar results are obtained.
+
+### Execution on cluster
+
+Next, these sequential approaches are executed on the bwUniCluster with the exact same commands as before by submitting the respective batch scripts which specify the necessary resources. The resulting *.out* and *.Rout* files with the corresponding batch scripts are provided below.
+
+#### `sapply()`
+
+```{r 4_1_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> system.time({
++   set.seed(42)
++   res_seq <- sapply(trials, ML_predictions)
++ })
+   user  system elapsed 
+392.708   0.960 395.186 
+> 
+> print(rowMeans(res_seq))
+[1] 166.66961 164.05505  31.32119  18.69426
+> 
+> print(as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK")))
+[1] 1
+> 
+> proc.time()
+   user  system elapsed 
+394.177   1.116 396.830 
+```
+
+```{r 4_1_batch, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=sequential.job
+#SBATCH --output=sequential.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=350mb
+#SBATCH --time=00:09:00
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module
+module load math/R/3.6.3
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore sequential.R
+```
+
+```{r 4_1_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore sequential.R"
+	User time (seconds): 394.30
+	System time (seconds): 1.15
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 6:37.17
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 296928
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 162544
+	Voluntary context switches: 943
+	Involuntary context switches: 231
+	Swaps: 0
+	File system inputs: 1448
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n365
+Job ID: 19648874
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 2
+CPU Utilized: 00:06:36
+CPU Efficiency: 46.70% of 00:14:08 core-walltime
+Job Wall-clock time: 00:07:04
+Memory Utilized: 297.30 MB
+Memory Efficiency: 84.94% of 350.00 MB
+```
+
+
+#### `{parallel}`
+
+```{r 4_1_par_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("parallel")) install.packages("parallel"); library(parallel)
+Loading required package: parallel
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 1
+> 
+> ## {parallel}
+> system.time({
++   cls <- makeCluster(n_cores)
++   clusterSetRNGStream(cls, iseed = 42)
++   
++   clusterEvalQ(cls, {
++     library(glmnet) 
++     library(randomForest) 
++     library(xgboost)
++   })
++   
++   # export functions
++   clusterExport(cls, c("generate_data", "ML_predictions")) 
++   results <- parSapply(cls, trials, ML_predictions)
++ 
++   stopCluster(cls)
++ })
+   user  system elapsed 
+  0.009   0.011 424.871 
+> 
+> print(rowMeans(results))
+[1] 168.00546 165.59771  32.14818  19.22099
+> 
+> proc.time()
+   user  system elapsed 
+  0.639   0.174 431.478 
+```
+
+```{r 4_1_par_batch, eval=FALSE, include=TRUE}
+#SBATCH --job-name=par_parallel.job
+#SBATCH --output=par_parallel.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=450mb
+#SBATCH --time=00:10:00
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module
+module load math/R/3.6.3
+
+export KMP_AFFINITY=disabled
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore par_parallel.R
+```
+
+```{r 4_1_par_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_parallel.R"
+	User time (seconds): 1.64
+	System time (seconds): 0.22
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 7:06.77
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 188472
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 86122
+	Voluntary context switches: 964
+	Involuntary context switches: 11
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n413
+Job ID: 19654493
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 2
+CPU Utilized: 00:00:02
+CPU Efficiency: 0.22% of 00:15:12 core-walltime
+Job Wall-clock time: 00:07:36
+Memory Utilized: 188.13 MB
+Memory Efficiency: 41.81% of 450.00 MB
+```
+
+#### `{foreach}`
+
+```{r 4_1_foreach_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("foreach")) install.packages("foreach"); library(foreach)
+Loading required package: foreach
+> if (!require("doParallel")) install.packages("doParallel"); library(doParallel)
+Loading required package: doParallel
+Loading required package: iterators
+Loading required package: parallel
+> if (!require("doRNG")) install.packages("doRNG"); library(doRNG)
+Loading required package: doRNG
+Loading required package: rngtools
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 1
+> 
+> ## {foreach}
+> system.time({
++   registerDoRNG(123) 
++   result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %do% ML_predictions(trial)
++ })
+   user  system elapsed 
+420.552   0.398 422.914 
+Warning message:
+executing %dopar% sequentially: no parallel backend registered 
+> colMeans(result)
+          lm       glmnet randomForest      xgboost 
+   164.06176    161.76605     30.30148     17.82272 
+> 
+> proc.time()
+   user  system elapsed 
+422.098   0.585 425.035 
+```
+
+```{r 4_1_foreach_batch, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=par_foreach.job
+#SBATCH --output=par_foreach.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=350mb
+#SBATCH --time=00:10:00
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module 
+module load math/R/3.6.3
+
+export KMP_AFFINITY=disabled
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore par_foreach.R
+```
+
+```{r 4_1_foreach_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_foreach.R"
+	User time (seconds): 422.25
+	System time (seconds): 0.61
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 7:05.26
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 298540
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 241467
+	Voluntary context switches: 1528
+	Involuntary context switches: 315
+	Swaps: 0
+	File system inputs: 256
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n413
+Job ID: 19654519
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 2
+CPU Utilized: 00:07:03
+CPU Efficiency: 46.28% of 00:15:14 core-walltime
+Job Wall-clock time: 00:07:37
+Memory Utilized: 298.82 MB
+Memory Efficiency: 85.38% of 350.00 MB
+```
+
+
+#### `{future}`
+
+```{r 4_1_future_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("future")) install.packages("future"); library(future)
+Loading required package: future
+> if (!require("future.apply")) install.packages("future.apply"); library(future.apply)
+Loading required package: future.apply
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 1
+> 
+> 
+> ## {future} 
+> system.time({
++   plan(sequential)
++   x <- future_sapply(trials, ML_predictions, future.seed = 43)
++ })
+   user  system elapsed 
+423.044   0.384 425.172 
+> rowMeans(x)
+[1] 158.66411 155.99732  29.48017  17.15097
+> 
+> proc.time()
+   user  system elapsed 
+424.605   0.561 426.935 
+```
+
+```{r 4_1_future_batch, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=par_future.job
+#SBATCH --output=par_future.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=350mb
+#SBATCH --time=00:10:00
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module 
+module load math/R/3.6.3
+
+export KMP_AFFINITY=disabled
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore par_future.R
+```
+
+```{r 4_1_future_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_future.R"
+	User time (seconds): 424.74
+	System time (seconds): 0.59
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 7:07.15
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 336204
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 239497
+	Voluntary context switches: 1289
+	Involuntary context switches: 319
+	Swaps: 0
+	File system inputs: 8
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n413
+Job ID: 19654489
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 2
+CPU Utilized: 00:07:05
+CPU Efficiency: 46.70% of 00:15:10 core-walltime
+Job Wall-clock time: 00:07:35
+Memory Utilized: 330.50 MB
+Memory Efficiency: 94.43% of 350.00 MB
+```
+
+
+### Comparison
+
+As shwon, all approaches executed on the cluster used only one core which translates to sequential processing. Evaluating the efficiency of the allocated resources, the *.out* files show that both the CPU and memory efficiency were very high and therefore, the allocated resources were optimally used.
+To most accurately compare the execution times between the local and cluster approach, the elapsed time measured by `system.time()` is taken and this will also hold for the following parts of this exercise.
+
+The different execution times are summarized in the following table.
+
+*Note: the exact execution times for the local approach might slightly deviate, the presented ones are from a previous run.*
+
+Approach | `sapply()` | `{parallel}` | `{foreach}` | `{future}`
+-------------------- | ------------- | ------------- | ------------- | ------------- 
+Local machine | **176.107 sec.** | 179.897 sec. | 183.102 sec. | 177.029 sec. 
+Cluster | **395.186 sec.** | 424.871 sec. | 422.914 sec. | 425.172 sec.
+
+Comparing the execution times of the approaches, it can be noted that operating on my local machine performed significantly faster than on the cluster. This shows that there is not much benefit of using a cluster (execution time-wise) with a single core for this use case, but the speed-up might only arise when using multiple cores. Also, it can be seen that the parallel frameworks may not be the best choice for sequential computing, as `sapply()` operates faster in this sequential task This is also not too surprising as the parallel frameworks were developed for making use of multiple cores and not a single one. For sequential computing, all the parallel methods perform similarly in terms of execution time.
+
+## 2. Parallel simulations with maximum number of local cores
+
+Next, the task at hand is implemented with the parallel frameworks (`{parallel}`, `{foreach}`,`{future}`) using the maximum number of local cores (here, 8 cores). 
+
+### Execution on local machine
+
+First, the parallel simulations are executed locally on my machine.
+
+#### `{parallel}`
+
+Implementing the workflow using `{parallel}`, a cluster is initialized using all available cores (on this machine: 8). Apart from that, the workflow remains the same as in part 1, just that `parallel::parSapply()` now implements the workflow 100 times in parallel and not sequentially. 
+
+```{r 2_parallel, echo=TRUE}
+system.time({
+  cls <- makeCluster(detectCores())
+  clusterSetRNGStream(cls, iseed = 42)
+  
+  clusterEvalQ(cls, {
+    library(glmnet) 
+    library(randomForest) 
+    library(xgboost)
+    })
+  
+  # export functions
+  clusterExport(cls, c("generate_data", "ML_predictions")) 
+  
+  results <- parSapply(cls, trials, ML_predictions)
+  stopCluster(cls)
+})
+
+print(rowMeans(results))
+```
+
+A similar result to the sequential approach can be identified where the ensemble methods lead to significantly better results than the regression techniques. 
+
+#### `{foreach}` 
+
+Next, `{foreach}` is used to initialize an implicit cluster with all available cores and a random seed is set to ensure reproducibility. Then, `foreach::foreach()` is used to execute the workflow the desired number of times in parallel (`%dopar%` operator) while specifying the way of combining results (`rbind`) and exporting the required packages.
+
+Note that also `%dorng%` from `{doRNG}` could be used to run the method in parallel and set the random number generator by adding `set.seed()` beforehand.
+
+```{r 2_foreach, echo=TRUE}
+system.time({
+  registerDoParallel(detectCores())
+  registerDoRNG(123) 
+  result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %dopar% ML_predictions(trial)
+  stopImplicitCluster()
+})
+
+colMeans(result)
+```
+
+Hence, similar results to the ones obtained in the previous approaches can be observed.
+
+#### `{future}` 
+
+Finally, the same operation is executed using the `{future}` framework by setting a multisession plan which means that the values are computed in parallel R sessions. Then, the apply variant of this framework (`future_apply::future_sapply()`) is called for the pre-specified number of times on the function `ML_predictions()`. With the option `future.seed`, it is ensured that the results are reproducible. Finally, a sequential plan is set to shut down the parallel workers afterwards.
+
+```{r 2_future, echo=TRUE}
+system.time({
+  plan(multisession, workers = detectCores())
+  x <- future_sapply(trials, ML_predictions, future.seed = 43)
+  plan(sequential)
+})
+
+rowMeans(x)
+```
+
+As it was the case for the previous methods, it can be observed that the ensemble methods lead on average to lower MSEs than the two regression techniques.
+
+### Execution on cluster
+
+Next, the three parallel frameworks are executed on the bwUniCluster. There, exactly the same operations as above are executed and the number of cores that have been allocated by SLURM are printed. As the `--cpus-per-task=` flag allocates logical cores, 16 cores are requested which corresponds to the 8 physical cores present on this local machine. Also, `export KMP_AFFINITY=disabled` is added to the batch scripts such that R will not try to run all of the specified workers on a single core due to the matrix multiplication operations, but rather makes use of all allocated cores. The respective batch scripts with requested memory and time with the resulting *.out* and *.Rout* output are shown below for each of the three frameworks.
+
+The only change between the commands in the local and cluster approach is the specification of the plan used in the `{future}` framework. While the multisession plan is used in the local execution, the multicore plan is implemented when executing it on the Cluster. This is because when calling `top` on the node where the job is executed, one can see that the multisession plan does not use all cores efficiently (but it does so on my local machine), while the multicore plan leads to the desired behaviour on the cluster. However, in RStudio (Windows) such forked R processes are not recommendable (e.g. see https://github.com/rstudio/rstudio/issues/2597#issuecomment-482187011). But as the commands are executed not locally but on the cluster as well as not via RStudio but directly by calling R and not on Windows but on Linux, it is fine to use the multicore plan there. Forking an R process might provide the advantage of less overhead as the additional processes are direct copies of the master and nothing (e.g. the two functions) needs to be exported.
+
+#### `{parallel}`
+
+*Note: different to `{foreach}` and `{future}`, the .out file of the `{parallel}` appraoch does not yield the correct memory efficiency when implementing parallel computing. This is due to the allocation to different cores. However, the requested memory was still determined by finding a minimum level for which the job does not run out of memory and presents therefore an efficient allocation.*
+
+```{r 4_2_batch_par, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=par_parallel.job
+#SBATCH --output=par_parallel.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=4800mb
+#SBATCH --time=00:02:00
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module
+module load math/R/3.6.3
+
+export KMP_AFFINITY=disabled
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore par_parallel.R
+```
+
+```{r 4_2_out_par, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_parallel.R"
+	User time (seconds): 1.33
+	System time (seconds): 0.40
+	Percent of CPU this job got: 3%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:55.27
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 189220
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 92509
+	Voluntary context switches: 3043
+	Involuntary context switches: 9
+	Swaps: 0
+	File system inputs: 105256
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n368
+Job ID: 19654968
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 16
+CPU Utilized: 00:00:02
+CPU Efficiency: 0.16% of 00:20:32 core-walltime
+Job Wall-clock time: 00:01:17
+Memory Utilized: 188.73 MB
+Memory Efficiency: 3.93% of 4.69 GB
+```
+
+```{r 4_2_Rout_par, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("parallel")) install.packages("parallel"); library(parallel)
+Loading required package: parallel
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 16
+> 
+> ## {parallel}
+> system.time({
++   cls <- makeCluster(n_cores)
++   clusterSetRNGStream(cls, iseed = 42)
++   
++   clusterEvalQ(cls, {
++     library(glmnet) 
++     library(randomForest) 
++     library(xgboost)
++   })
++   
++   # export functions
++   clusterExport(cls, c("generate_data", "ML_predictions")) 
++   results <- parSapply(cls, trials, ML_predictions)
++ 
++   stopCluster(cls)
++ })
+   user  system elapsed 
+  0.035   0.125  47.089 
+> 
+> print(rowMeans(results))
+[1] 162.57464 159.99791  30.87518  17.98435
+> 
+> proc.time()
+   user  system elapsed 
+  1.193   0.329  54.023  
+```
+
+#### `{foreach}`
+```{r 4_2_batch_for, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=par_foreach.job
+#SBATCH --output=par_foreach.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=4800mb
+#SBATCH --time=00:01:30
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module 
+module load math/R/3.6.3
+
+export KMP_AFFINITY=disabled
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore par_foreach.R
+```
+
+```{r 4_2_out_for, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_foreach.R"
+	User time (seconds): 668.38
+	System time (seconds): 5.18
+	Percent of CPU this job got: 1426%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:47.22
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 279244
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 1090558
+	Voluntary context switches: 1810
+	Involuntary context switches: 1105
+	Swaps: 0
+	File system inputs: 40
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n367
+Job ID: 19654965
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 16
+CPU Utilized: 00:11:14
+CPU Efficiency: 59.33% of 00:18:56 core-walltime
+Job Wall-clock time: 00:01:11
+Memory Utilized: 4.36 GB
+Memory Efficiency: 93.06% of 4.69 GB
+```
+
+```{r 4_2_Rout_for, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("foreach")) install.packages("foreach"); library(foreach)
+Loading required package: foreach
+> if (!require("doParallel")) install.packages("doParallel"); library(doParallel)
+Loading required package: doParallel
+Loading required package: iterators
+Loading required package: parallel
+> if (!require("doRNG")) install.packages("doRNG"); library(doRNG)
+Loading required package: doRNG
+Loading required package: rngtools
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 16
+> 
+> ## {foreach}
+> system.time({
++   registerDoParallel(n_cores)
++   registerDoRNG(123) 
++   result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %dopar% ML_predictions(trial)
++   stopImplicitCluster()
++ })
+   user  system elapsed 
+622.183   4.605  45.350 
+> colMeans(result)
+          lm       glmnet randomForest      xgboost 
+   157.95705    155.18481     29.08793     17.28413 
+> 
+> proc.time()
+   user  system elapsed 
+668.233   5.138  46.983 
+```
+
+#### `{future}`
+
+```{r 4_2_batch_fut, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=par_future.job
+#SBATCH --output=par_future.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=4800mb
+#SBATCH --time=00:02:00
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module 
+module load math/R/3.6.3
+
+export KMP_AFFINITY=disabled
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore par_future.R
+```
+
+```{r 4_2_out_fut, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_future.R"
+	User time (seconds): 446.44
+	System time (seconds): 3.68
+	Percent of CPU this job got: 823%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:54.63
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 314840
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 1481089
+	Voluntary context switches: 1925
+	Involuntary context switches: 8384
+	Swaps: 0
+	File system inputs: 16
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n416
+Job ID: 19654521
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 16
+CPU Utilized: 00:07:30
+CPU Efficiency: 37.50% of 00:20:00 core-walltime
+Job Wall-clock time: 00:01:15
+Memory Utilized: 4.61 GB
+Memory Efficiency: 98.34% of 4.69 GB
+```
+
+```{r 4_2_Rout_fut, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("future")) install.packages("future"); library(future)
+Loading required package: future
+> if (!require("future.apply")) install.packages("future.apply"); library(future.apply)
+Loading required package: future.apply
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 16
+> 
+> 
+> ## {future} 
+> system.time({
++   plan(multicore, workers = n_cores)
++   x <- future_sapply(trials, ML_predictions, future.seed = 43)
++   plan(sequential)
++ })
+   user  system elapsed 
+445.128   3.488  53.030 
+> rowMeans(x)
+[1] 158.66411 155.99732  29.48017  17.15097
+> 
+> proc.time()
+   user  system elapsed 
+446.306   3.644  54.407
+```
+
+
+### Comparison
+
+*Note: the exact execution times for the local approach might slightly deviate, the presented ones are from a previous run.*
+
+Approach | `{parallel}` | `{foreach}` | `{future}`
+-------------------- | ------------- | ------------- | -------------
+Local machine | 37.107 sec. | **35.732 sec.** | 44.373 sec.
+Cluster | 47.089 sec. | **45.350 sec.** | 53.030 sec.
+
+Comparing the execution times of the parallel computations on the local machine and the cluster, it can be seen that that the execution on my local machine was still faster, but with a significantly smaller difference compared to the first part. This shows that using the local machine is still better than parallel computing for the number of cores that the local machine provides but to a less extreme extent. The benefit of cluster computing may only arise for more cores than the local machine can offer, which will be investigated in the next part. Also, it can be seen that `{foreach}` is the fastest parallel base framework for the maximum number of local cores which was also shown in assignment III (exercise 1).
+
+## 3. Parallel simulations with differing number of cores
+
+Finally, the same simulations are run in parallel on the cluster for different numbers of cores, i.e. for 2, 4, 10, 20, 40 and 80 cores. Below, one batch script per framework is shown, exemplarily for the execution on two cores. For the different number of cores, only the `--cpus-per-task`, `--mem` and `--time` flags are changed. It would have also been possible to use the `--mem-per-cpu` and not adapt `--mem` anymore, however, one can better fine tune the most efficient memory usage by directly specifying `--mem`.
+
+```{r 4_3_parallel_batch, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=par_parallel.job
+#SBATCH --output=par_parallel.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=800mb
+#SBATCH --time=00:06:30
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module
+module load math/R/3.6.3
+
+export KMP_AFFINITY=disabled
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore par_parallel.R
+```
+
+```{r 4_3_foreach_batch, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=par_foreach.job
+#SBATCH --output=par_foreach.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=800mb
+#SBATCH --time=00:06:30
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module 
+module load math/R/3.6.3
+
+export KMP_AFFINITY=disabled
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore par_foreach.R
+```
+
+```{r 4_3_future_batch, eval=FALSE, include=TRUE}
+#!/bin/bash
+
+#SBATCH --job-name=par_future.job
+#SBATCH --output=par_future.out
+#SBATCH --export=ALL
+
+#SBATCH --partition=single
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=800mb
+#SBATCH --time=00:07:00
+
+#SBATCH --mail-user=tim-moritz.buendert@student.uni-tuebingen.de
+#SBATCH --mail-type=BEGIN,END,FAIL
+
+# Load module 
+module load math/R/3.6.3
+
+export KMP_AFFINITY=disabled
+
+# Start R program
+/usr/bin/time -v R CMD BATCH --save --no-restore par_future.R
+```
+
+Based on these batch scripts and the same *.R* files and commands that have already been used in part 2, the three frameworks are executed with the different numbers of cores. The resulting *.out* and *.Rout* files are provided below.
+
+### 2 Cores
+
+#### `{parallel}`
+```{r 4_3_2_parallel_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_parallel.R"
+	User time (seconds): 1.55
+	System time (seconds): 0.22
+	Percent of CPU this job got: 0%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 5:31.28
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 188536
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 86813
+	Voluntary context switches: 983
+	Involuntary context switches: 19
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n413
+Job ID: 19648861
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 2
+CPU Utilized: 00:00:02
+CPU Efficiency: 0.28% of 00:12:02 core-walltime
+Job Wall-clock time: 00:06:01
+Memory Utilized: 188.35 MB
+Memory Efficiency: 23.54% of 800.00 MB
+```
+
+```{r 4_3_2_parallel_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("parallel")) install.packages("parallel"); library(parallel)
+Loading required package: parallel
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 2
+> 
+> ## {parallel}
+> system.time({
++   cls <- makeCluster(n_cores)
++   clusterSetRNGStream(cls, iseed = 42)
++   
++   clusterEvalQ(cls, {
++     library(glmnet) 
++     library(randomForest) 
++     library(xgboost)
++   })
++   
++   # export functions
++   clusterExport(cls, c("generate_data", "ML_predictions")) 
++   
++   results <- parSapply(cls, trials, ML_predictions)
++   stopCluster(cls)
++ })
+   user  system elapsed 
+  0.015   0.020 329.473 
+> print(rowMeans(results))
+[1] 165.6905 163.1148  31.2766  18.5472
+> 
+> proc.time()
+   user  system elapsed 
+  1.398   0.168 331.014 
+```
+
+#### `{foreach}`
+```{r 4_3_2_foreach_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_foreach.R"
+	User time (seconds): 651.28
+	System time (seconds): 2.53
+	Percent of CPU this job got: 198%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 5:29.95
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 281980
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 286647
+	Voluntary context switches: 1740
+	Involuntary context switches: 1601
+	Swaps: 0
+	File system inputs: 496
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n413
+Job ID: 19648862
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 2
+CPU Utilized: 00:10:54
+CPU Efficiency: 91.60% of 00:11:54 core-walltime
+Job Wall-clock time: 00:05:57
+Memory Utilized: 737.76 MB
+Memory Efficiency: 92.22% of 800.00 MB
+```
+
+```{r 4_3_2_foreach_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("foreach")) install.packages("foreach"); library(foreach)
+Loading required package: foreach
+> if (!require("doParallel")) install.packages("doParallel"); library(doParallel)
+Loading required package: doParallel
+Loading required package: iterators
+Loading required package: parallel
+> if (!require("doRNG")) install.packages("doRNG"); library(doRNG)
+Loading required package: doRNG
+Loading required package: rngtools
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 2
+> 
+> ## {foreach}
+> system.time({
++   registerDoParallel(n_cores)
++   registerDoRNG(123) 
++   result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %dopar% ML_predictions(trial)
++   stopImplicitCluster()
++ })
+   user  system elapsed 
+324.625   1.188 327.664 
+> colMeans(result)
+          lm       glmnet randomForest      xgboost 
+   157.95705    155.18481     29.08793     17.28413 
+> 
+> proc.time()
+   user  system elapsed 
+326.098   1.355 329.691
+```
+
+#### `{future}`
+```{r 4_3_2_future_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_future.R"
+	User time (seconds): 677.35
+	System time (seconds): 2.95
+	Percent of CPU this job got: 198%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 5:42.82
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 301168
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 347790
+	Voluntary context switches: 3570
+	Involuntary context switches: 3620
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n413
+Job ID: 19654543
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 2
+CPU Utilized: 00:11:20
+CPU Efficiency: 92.14% of 00:12:18 core-walltime
+Job Wall-clock time: 00:06:09
+Memory Utilized: 804.29 MB
+Memory Efficiency: 96.90% of 830.00 MB
+```
+
+```{r 4_3_2_future_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("future")) install.packages("future"); library(future)
+Loading required package: future
+> if (!require("future.apply")) install.packages("future.apply"); library(future.apply)
+Loading required package: future.apply
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 2
+> 
+> 
+> ## {future} 
+> system.time({
++   plan(multicore, workers = n_cores)
++   x <- future_sapply(trials, ML_predictions, future.seed = 43)
++   plan(sequential)
++ })
+   user  system elapsed 
+675.640   2.705 340.786 
+> rowMeans(x)
+[1] 158.66411 155.99732  29.48017  17.15097
+> 
+> proc.time()
+   user  system elapsed 
+677.199   2.898 342.571  
+```
+
+### 4 Cores
+
+#### `{parallel}`
+```{r 4_3_4_parallel_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_parallel.R"
+	User time (seconds): 1.60
+	System time (seconds): 0.24
+	Percent of CPU this job got: 1%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:50.14
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 189028
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 87626
+	Voluntary context switches: 1008
+	Involuntary context switches: 10
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n413
+Job ID: 19648859
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 4
+CPU Utilized: 00:00:02
+CPU Efficiency: 0.25% of 00:13:08 core-walltime
+Job Wall-clock time: 00:03:17
+Memory Utilized: 188.49 MB
+Memory Efficiency: 14.50% of 1.27 GB
+```
+
+```{r 4_3_4_parallel_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("parallel")) install.packages("parallel"); library(parallel)
+Loading required package: parallel
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 4
+> 
+> ## {parallel}
+> system.time({
++   cls <- makeCluster(n_cores)
++   clusterSetRNGStream(cls, iseed = 42)
++   
++   clusterEvalQ(cls, {
++     library(glmnet) 
++     library(randomForest) 
++     library(xgboost)
++   })
++   
++   # export functions
++   clusterExport(cls, c("generate_data", "ML_predictions")) 
++   
++   results <- parSapply(cls, trials, ML_predictions)
++   stopCluster(cls)
++ })
+   user  system elapsed 
+  0.025   0.032 168.299 
+> print(rowMeans(results))
+[1] 154.63238 152.14709  30.94885  17.55956
+> 
+> proc.time()
+   user  system elapsed 
+  1.448   0.197 169.897
+```
+
+#### `{foreach}`
+```{r 4_3_4_foreach_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_foreach.R"
+	User time (seconds): 515.67
+	System time (seconds): 1.89
+	Percent of CPU this job got: 394%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:11.19
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 283804
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 401686
+	Voluntary context switches: 1442
+	Involuntary context switches: 865
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n415
+Job ID: 19648854
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 4
+CPU Utilized: 00:08:38
+CPU Efficiency: 86.33% of 00:10:00 core-walltime
+Job Wall-clock time: 00:02:30
+Memory Utilized: 1.26 GB
+Memory Efficiency: 86.31% of 1.46 GB
+```
+
+```{r 4_3_4_foreach_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("foreach")) install.packages("foreach"); library(foreach)
+Loading required package: foreach
+> if (!require("doParallel")) install.packages("doParallel"); library(doParallel)
+Loading required package: doParallel
+Loading required package: iterators
+Loading required package: parallel
+> if (!require("doRNG")) install.packages("doRNG"); library(doRNG)
+Loading required package: doRNG
+Loading required package: rngtools
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 4
+> 
+> ## {foreach}
+> system.time({
++   registerDoParallel(n_cores)
++   registerDoRNG(123) 
++   result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %dopar% ML_predictions(trial)
++   stopImplicitCluster()
++ })
+   user  system elapsed 
+385.587   1.288 129.578 
+> colMeans(result)
+          lm       glmnet randomForest      xgboost 
+   157.95705    155.18481     29.08793     17.28413 
+> 
+> proc.time()
+   user  system elapsed 
+515.528   1.860 130.978
+```
+
+#### `{future}`
+```{r 4_3_4_future_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_future.R"
+	User time (seconds): 632.90
+	System time (seconds): 2.94
+	Percent of CPU this job got: 390%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:42.77
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 303492
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 427486
+	Voluntary context switches: 2223
+	Involuntary context switches: 1824
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n413
+Job ID: 19654571
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 4
+CPU Utilized: 00:10:36
+CPU Efficiency: 84.57% of 00:12:32 core-walltime
+Job Wall-clock time: 00:03:08
+Memory Utilized: 1.33 GB
+Memory Efficiency: 90.96% of 1.46 GB
+```
+
+```{r 4_3_4_future_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("future")) install.packages("future"); library(future)
+Loading required package: future
+> if (!require("future.apply")) install.packages("future.apply"); library(future.apply)
+Loading required package: future.apply
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 4
+> 
+> 
+> ## {future} 
+> system.time({
++   plan(multicore, workers = n_cores)
++   x <- future_sapply(trials, ML_predictions, future.seed = 43)
++   plan(sequential)
++ })
+   user  system elapsed 
+631.406   2.673 160.939 
+> rowMeans(x)
+[1] 158.66411 155.99732  29.48017  17.15097
+> 
+> proc.time()
+   user  system elapsed 
+632.764   2.886 162.535 
+```
+
+
+### 10 Cores
+
+#### `{parallel}`
+```{r 4_3_10_parallel_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_parallel.R"
+	User time (seconds): 1.39
+	System time (seconds): 0.21
+	Percent of CPU this job got: 2%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:58.70
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 188700
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 90104
+	Voluntary context switches: 1032
+	Involuntary context switches: 5
+	Swaps: 0
+	File system inputs: 32
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n415
+Job ID: 19648845
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 10
+CPU Utilized: 00:00:02
+CPU Efficiency: 0.26% of 00:13:00 core-walltime
+Job Wall-clock time: 00:01:18
+Memory Utilized: 188.54 MB
+Memory Efficiency: 6.28% of 2.93 GB
+```
+
+```{r 4_3_10_parallel_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("parallel")) install.packages("parallel"); library(parallel)
+Loading required package: parallel
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 10
+> 
+> ## {parallel}
+> system.time({
++   cls <- makeCluster(n_cores)
++   clusterSetRNGStream(cls, iseed = 42)
++   
++   clusterEvalQ(cls, {
++     library(glmnet) 
++     library(randomForest) 
++     library(xgboost)
++   })
++   
++   # export functions
++   clusterExport(cls, c("generate_data", "ML_predictions")) 
++   
++   results <- parSapply(cls, trials, ML_predictions)
++   stopCluster(cls)
++ })
+   user  system elapsed 
+  0.032   0.051  57.038 
+> print(rowMeans(results))
+[1] 152.99778 150.34241  30.10550  17.51307
+> 
+> proc.time()
+   user  system elapsed 
+  1.232   0.182  58.462 
+```
+
+#### `{foreach}`
+```{r 4_3_10_foreach_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_foreach.R"
+	User time (seconds): 522.85
+	System time (seconds): 2.78
+	Percent of CPU this job got: 965%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:54.44
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 279860
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 729145
+	Voluntary context switches: 1526
+	Involuntary context switches: 733
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n415
+Job ID: 19648847
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 10
+CPU Utilized: 00:08:46
+CPU Efficiency: 72.05% of 00:12:10 core-walltime
+Job Wall-clock time: 00:01:13
+Memory Utilized: 2.80 GB
+Memory Efficiency: 95.69% of 2.93 GB
+```
+
+```{r 4_3_10_foreach_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("foreach")) install.packages("foreach"); library(foreach)
+Loading required package: foreach
+> if (!require("doParallel")) install.packages("doParallel"); library(doParallel)
+Loading required package: doParallel
+Loading required package: iterators
+Loading required package: parallel
+> if (!require("doRNG")) install.packages("doRNG"); library(doRNG)
+Loading required package: doRNG
+Loading required package: rngtools
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 10
+> 
+> ## {foreach}
+> system.time({
++   registerDoParallel(n_cores)
++   registerDoRNG(123) 
++   result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %dopar% ML_predictions(trial)
++   stopImplicitCluster()
++ })
+   user  system elapsed 
+469.137   2.357  52.801 
+> colMeans(result)
+          lm       glmnet randomForest      xgboost 
+   157.95705    155.18481     29.08793     17.28413 
+> 
+> proc.time()
+   user  system elapsed 
+470.392   2.493  54.217
+```
+
+#### `{future}`
+```{r 4_3_10_future_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_future.R"
+	User time (seconds): 687.19
+	System time (seconds): 5.14
+	Percent of CPU this job got: 961%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:12.01
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 313520
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 863740
+	Voluntary context switches: 1799
+	Involuntary context switches: 1296
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n413
+Job ID: 19654668
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 10
+CPU Utilized: 00:11:32
+CPU Efficiency: 72.08% of 00:16:00 core-walltime
+Job Wall-clock time: 00:01:36
+Memory Utilized: 3.10 GB
+Memory Efficiency: 96.29% of 3.22 GB
+```
+
+```{r 4_3_10_future_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("future")) install.packages("future"); library(future)
+Loading required package: future
+> if (!require("future.apply")) install.packages("future.apply"); library(future.apply)
+Loading required package: future.apply
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 10
+> 
+> 
+> ## {future} 
+> system.time({
++   plan(multicore, workers = n_cores)
++   x <- future_sapply(trials, ML_predictions, future.seed = 43)
++   plan(sequential)
++ })
+   user  system elapsed 
+685.694   4.902  70.203 
+> rowMeans(x)
+[1] 158.66411 155.99732  29.48017  17.15097
+> 
+> proc.time()
+   user  system elapsed 
+687.050   5.090  71.776 
+```
+
+### 20 Cores
+
+#### `{parallel}`
+```{r 4_20_4_parallel_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_parallel.R"
+	User time (seconds): 1.40
+	System time (seconds): 0.36
+	Percent of CPU this job got: 4%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:43.51
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 188636
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 94127
+	Voluntary context switches: 1045
+	Involuntary context switches: 7
+	Swaps: 0
+	File system inputs: 64
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n373
+Job ID: 19648811
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 20
+CPU Utilized: 00:00:02
+CPU Efficiency: 0.13% of 00:25:40 core-walltime
+Job Wall-clock time: 00:01:17
+Memory Utilized: 188.57 MB
+Memory Efficiency: 3.25% of 5.66 GB
+```
+
+```{r 4_20_4_parallel_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("parallel")) install.packages("parallel"); library(parallel)
+Loading required package: parallel
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 20
+> 
+> ## {parallel}
+> system.time({
++   cls <- makeCluster(n_cores)
++   clusterSetRNGStream(cls, iseed = 42)
++   
++   clusterEvalQ(cls, {
++     library(glmnet) 
++     library(randomForest) 
++     library(xgboost)
++   })
++   
++   # export functions
++   clusterExport(cls, c("generate_data", "ML_predictions")) 
++   
++   results <- parSapply(cls, trials, ML_predictions)
++   stopCluster(cls)
++ })
+   user  system elapsed 
+  0.050   0.159  41.859 
+> print(rowMeans(results))
+[1] 170.24417 167.29548  32.41549  18.78254
+> 
+> proc.time()
+   user  system elapsed 
+  1.241   0.313  43.226 
+```
+
+#### `{foreach}`
+```{r 4_20_4_foreach_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_foreach.R"
+	User time (seconds): 685.88
+	System time (seconds): 5.86
+	Percent of CPU this job got: 1644%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:42.05
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 278184
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 7
+	Minor (reclaiming a frame) page faults: 1250142
+	Voluntary context switches: 3997
+	Involuntary context switches: 1519
+	Swaps: 0
+	File system inputs: 57440
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n373
+Job ID: 19648810
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 20
+CPU Utilized: 00:11:32
+CPU Efficiency: 56.72% of 00:20:20 core-walltime
+Job Wall-clock time: 00:01:01
+Memory Utilized: 5.32 GB
+Memory Efficiency: 99.04% of 5.37 GB
+```
+
+```{r 4_20_4_foreach_Rout, eval=FALSE, include=TRUE}
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("foreach")) install.packages("foreach"); library(foreach)
+Loading required package: foreach
+> if (!require("doParallel")) install.packages("doParallel"); library(doParallel)
+Loading required package: doParallel
+Loading required package: iterators
+Loading required package: parallel
+> if (!require("doRNG")) install.packages("doRNG"); library(doRNG)
+Loading required package: doRNG
+Loading required package: rngtools
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 20
+> 
+> ## {foreach}
+> system.time({
++   registerDoParallel(n_cores)
++   registerDoRNG(123) 
++   result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %dopar% ML_predictions(trial)
++   stopImplicitCluster()
++ })
+   user  system elapsed 
+684.530   5.605  34.925 
+> colMeans(result)
+          lm       glmnet randomForest      xgboost 
+   157.95705    155.18481     29.08793     17.28413 
+> 
+> proc.time()
+   user  system elapsed 
+685.738   5.823  41.527 
+```
+
+#### `{future}`
+```{r 4_20_4_future_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_future.R"
+	User time (seconds): 455.12
+	System time (seconds): 5.13
+	Percent of CPU this job got: 864%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:53.26
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 314480
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 1836865
+	Voluntary context switches: 2551
+	Involuntary context switches: 8614
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n416
+Job ID: 19654687
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 20
+CPU Utilized: 00:07:40
+CPU Efficiency: 30.67% of 00:25:00 core-walltime
+Job Wall-clock time: 00:01:15
+Memory Utilized: 5.53 GB
+Memory Efficiency: 92.87% of 5.96 GB
+```
+
+```{r 4_20_4_future_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("future")) install.packages("future"); library(future)
+Loading required package: future
+> if (!require("future.apply")) install.packages("future.apply"); library(future.apply)
+Loading required package: future.apply
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 20
+> 
+> 
+> ## {future} 
+> system.time({
++   plan(multicore, workers = n_cores)
++   x <- future_sapply(trials, ML_predictions, future.seed = 43)
++   plan(sequential)
++ })
+   user  system elapsed 
+453.855   4.904  51.676 
+> rowMeans(x)
+[1] 158.66411 155.99732  29.48017  17.15097
+> 
+> proc.time()
+   user  system elapsed 
+454.997   5.082  53.049  
+```
+
+
+### 40 Cores
+
+#### `{parallel}`
+```{r 4_40_4_parallel_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_parallel.R"
+	User time (seconds): 1.46
+	System time (seconds): 0.51
+	Percent of CPU this job got: 5%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:38.35
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 188744
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 102068
+	Voluntary context switches: 1125
+	Involuntary context switches: 19
+	Swaps: 0
+	File system inputs: 32
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n374
+Job ID: 19649040
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 40
+CPU Utilized: 00:00:02
+CPU Efficiency: 0.09% of 00:38:40 core-walltime
+Job Wall-clock time: 00:00:58
+Memory Utilized: 189.22 MB
+Memory Efficiency: 1.75% of 10.55 GB
+```
+
+```{r 4_40_4_parallel_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("parallel")) install.packages("parallel"); library(parallel)
+Loading required package: parallel
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 40
+> 
+> ## {parallel}
+> system.time({
++   cls <- makeCluster(n_cores)
++   clusterSetRNGStream(cls, iseed = 42)
++   
++   clusterEvalQ(cls, {
++     library(glmnet) 
++     library(randomForest) 
++     library(xgboost)
++   })
++   
++   # export functions
++   clusterExport(cls, c("generate_data", "ML_predictions")) 
++   
++   results <- parSapply(cls, trials, ML_predictions)
++   stopCluster(cls)
++ })
+   user  system elapsed 
+  0.091   0.337  36.738 
+> print(rowMeans(results))
+[1] 165.06127 162.44382  31.29666  17.81951
+> 
+> proc.time()
+   user  system elapsed 
+  1.310   0.470  38.119 
+```
+
+#### `{foreach}`
+```{r 4_40_4_foreach_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_foreach.R"
+	User time (seconds): 751.12
+	System time (seconds): 9.68
+	Percent of CPU this job got: 2522%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:30.16
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 253336
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 29
+	Minor (reclaiming a frame) page faults: 2260827
+	Voluntary context switches: 9227
+	Involuntary context switches: 2751
+	Swaps: 0
+	File system inputs: 124696
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n425
+Job ID: 19662994
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 40
+CPU Utilized: 00:12:41
+CPU Efficiency: 35.90% of 00:35:20 core-walltime
+Job Wall-clock time: 00:00:53
+Memory Utilized: 9.61 GB
+Memory Efficiency: 98.42% of 9.77 GB
+```
+
+```{r 4_40_4_foreach_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("foreach")) install.packages("foreach"); library(foreach)
+Loading required package: foreach
+> if (!require("doParallel")) install.packages("doParallel"); library(doParallel)
+Loading required package: doParallel
+Loading required package: iterators
+Loading required package: parallel
+> if (!require("doRNG")) install.packages("doRNG"); library(doRNG)
+Loading required package: doRNG
+Loading required package: rngtools
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 40
+> 
+> ## {foreach}
+> system.time({
++   registerDoParallel(n_cores)
++   registerDoRNG(123) 
++   result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %dopar% ML_predictions(trial)
++   stopImplicitCluster()
++ })
+   user  system elapsed 
+728.472   9.121  21.955 
+> colMeans(result)
+          lm       glmnet randomForest      xgboost 
+   157.95705    155.18481     29.08793     17.28413 
+> 
+> proc.time()
+   user  system elapsed 
+729.687   9.397  28.962 
+```
+
+#### `{future}`
+```{r 4_40_4_future_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_future.R"
+	User time (seconds): 571.35
+	System time (seconds): 9.85
+	Percent of CPU this job got: 1674%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:34.71
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 298696
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 54
+	Minor (reclaiming a frame) page faults: 3090517
+	Voluntary context switches: 6488
+	Involuntary context switches: 7658
+	Swaps: 0
+	File system inputs: 176248
+	File system outputs: 24
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n437
+Job ID: 19654730
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 40
+CPU Utilized: 00:09:41
+CPU Efficiency: 26.41% of 00:36:40 core-walltime
+Job Wall-clock time: 00:00:55
+Memory Utilized: 10.78 GB
+Memory Efficiency: 95.13% of 11.33 GB
+```
+
+```{r 4_40_4_future_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("future")) install.packages("future"); library(future)
+Loading required package: future
+> if (!require("future.apply")) install.packages("future.apply"); library(future.apply)
+Loading required package: future.apply
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 40
+> 
+> 
+> ## {future} 
+> system.time({
++   plan(multicore, workers = n_cores)
++   x <- future_sapply(trials, ML_predictions, future.seed = 43)
++   plan(sequential)
++ })
+   user  system elapsed 
+569.914   9.551  26.379 
+> rowMeans(x)
+[1] 158.66411 155.99732  29.48017  17.15097
+> 
+> proc.time()
+   user  system elapsed 
+571.191   9.804  33.642 
+```
+
+
+### 80 Cores
+
+#### `{parallel}`
+```{r 4_80_4_parallel_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_parallel.R"
+	User time (seconds): 1.48
+	System time (seconds): 0.85
+	Percent of CPU this job got: 6%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:34.22
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 191804
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 118650
+	Voluntary context switches: 1231
+	Involuntary context switches: 18
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 32
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n433
+Job ID: 19649078
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 80
+CPU Utilized: 00:00:02
+CPU Efficiency: 0.05% of 01:10:40 core-walltime
+Job Wall-clock time: 00:00:53
+Memory Utilized: 192.34 MB
+Memory Efficiency: 0.99% of 19.04 GB
+```
+
+```{r 4_80_4_parallel_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("parallel")) install.packages("parallel"); library(parallel)
+Loading required package: parallel
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 80
+> 
+> ## {parallel}
+> system.time({
++   cls <- makeCluster(n_cores)
++   clusterSetRNGStream(cls, iseed = 42)
++   
++   clusterEvalQ(cls, {
++     library(glmnet) 
++     library(randomForest) 
++     library(xgboost)
++   })
++   
++   # export functions
++   clusterExport(cls, c("generate_data", "ML_predictions")) 
++   
++   results <- parSapply(cls, trials, ML_predictions)
++   stopCluster(cls)
++ })
+   user  system elapsed 
+  0.149   0.628  32.597 
+> print(rowMeans(results))
+[1] 155.66348 153.03165  28.91328  16.98275
+> 
+> proc.time()
+   user  system elapsed 
+  1.242   0.765  33.850 
+```
+
+#### `{foreach}`
+```{r 4_80_4_foreach_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_foreach.R"
+	User time (seconds): 689.82
+	System time (seconds): 12.77
+	Percent of CPU this job got: 4506%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:15.59
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 247608
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 233
+	Minor (reclaiming a frame) page faults: 2942126
+	Voluntary context switches: 11786
+	Involuntary context switches: 9394
+	Swaps: 0
+	File system inputs: 387904
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n433
+Job ID: 19649050
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 80
+CPU Utilized: 00:11:43
+CPU Efficiency: 25.11% of 00:46:40 core-walltime
+Job Wall-clock time: 00:00:35
+Memory Utilized: 18.11 GB
+Memory Efficiency: 92.74% of 19.53 GB
+```
+
+```{r 4_80_4_foreach_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("foreach")) install.packages("foreach"); library(foreach)
+Loading required package: foreach
+> if (!require("doParallel")) install.packages("doParallel"); library(doParallel)
+Loading required package: doParallel
+Loading required package: iterators
+Loading required package: parallel
+> if (!require("doRNG")) install.packages("doRNG"); library(doRNG)
+Loading required package: doRNG
+Loading required package: rngtools
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 80
+> 
+> ## {foreach}
+> system.time({
++   registerDoParallel(n_cores)
++   registerDoRNG(123) 
++   result <- foreach(trial = trials, .combine = rbind, .packages = c("glmnet", "randomForest", "xgboost")) %dopar% ML_predictions(trial)
++   stopImplicitCluster()
++ })
+   user  system elapsed 
+677.046  12.115  12.115 
+> colMeans(result)
+          lm       glmnet randomForest      xgboost 
+   157.95705    155.18481     29.08793     17.28413 
+> 
+> proc.time()
+   user  system elapsed 
+678.218  12.423  14.997 
+```
+
+#### `{future}`
+```{r 4_80_4_future_out, eval=FALSE, include=TRUE}
+Loading module dependency 'compiler/intel/19.1'.
+Loading module dependency 'numlib/mkl/2020'.
+	Command being timed: "R CMD BATCH --save --no-restore par_future.R"
+	User time (seconds): 634.32
+	System time (seconds): 16.57
+	Percent of CPU this job got: 3111%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:20.91
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 291616
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 203
+	Minor (reclaiming a frame) page faults: 4115429
+	Voluntary context switches: 11346
+	Involuntary context switches: 10797
+	Swaps: 0
+	File system inputs: 351048
+	File system outputs: 24
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+============================= JOB FEEDBACK =============================
+
+NodeName=uc2n453
+Job ID: 19654750
+Cluster: uc2
+User/Group: tu_zxofk17/tu_tu
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 80
+CPU Utilized: 00:10:51
+CPU Efficiency: 20.34% of 00:53:20 core-walltime
+Job Wall-clock time: 00:00:40
+Memory Utilized: 16.92 GB
+Memory Efficiency: 96.24% of 17.58 GB
+```
+
+```{r 4_80_4_future_Rout, eval=FALSE, include=TRUE}
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> if (!require("MASS")) install.packages("MASS"); library(MASS)
+Loading required package: MASS
+> if (!require("Matrix")) install.packages("Matrix"); library(Matrix)
+Loading required package: Matrix
+> if (!require("glmnet")) install.packages("glmnet"); library(glmnet)
+Loading required package: glmnet
+Loaded glmnet 4.1-2
+> if (!require("randomForest")) install.packages("randomForest"); library(randomForest)
+Loading required package: randomForest
+randomForest 4.6-14
+Type rfNews() to see new features/changes/bug fixes.
+> if (!require("xgboost")) install.packages("xgboost"); library(xgboost)
+Loading required package: xgboost
+> if (!require("future")) install.packages("future"); library(future)
+Loading required package: future
+> if (!require("future.apply")) install.packages("future.apply"); library(future.apply)
+Loading required package: future.apply
+> 
+> source("generate_data.R")
+> source("ML_predictions.R")
+> 
+> trials <- 1:100
+> 
+> n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK"))
+> print(n_cores)
+[1] 80
+> 
+> 
+> ## {future} 
+> system.time({
++   plan(multicore, workers = n_cores)
++   x <- future_sapply(trials, ML_predictions, future.seed = 43)
++   plan(sequential)
++ })
+   user  system elapsed 
+632.888  16.194  13.086 
+> rowMeans(x)
+[1] 158.66411 155.99732  29.48017  17.15097
+> 
+> proc.time()
+   user  system elapsed 
+634.151  16.519  19.613  
+```
+
+
+
+### Comparison
+
+The following table summarizes the measured execution times of the approaches observed throughout this exercise for the different numbers of requested (logical) cores.
+
+Number of (logical) cores | `{parallel}` | `{foreach}` | `{future}` | `sapply()`
+----------------- | ------------- | ------------- | ------------- | -------------
+1 core (sequential; part 1) | 424.871 sec. | 422.914 sec. | 425.172 sec. | **395.186 sec.**
+2 cores | 329.473 sec. | **327.664 sec.** | 340.786 sec. | *n.a.*
+4 cores | 168.299 sec. | **129.578 sec.** | 160.939 sec. | *n.a.*
+10 cores | 57.038 sec. | **52.801 sec.** | 70.203 sec. | *n.a.*
+16 cores (part 2) | 47.089 sec. | **45.350 sec.** | 53.030 sec. | *n.a.*
+20 cores | 41.859 sec. | **34.925 sec.** | 51.676 sec. | *n.a.*
+40 cores | 36.738 sec. | **21.955 sec.** | 26.379 sec. | *n.a.*
+80 cores | 32.597 sec. | **12.115 sec.** | 13.086 sec. | *n.a.*
+
+Comparing the operations on different numbers of cores, it can be seen that the execution time decreases monotonically as more cores are used for all of the parallel frameworks, which makes intuitively sense. In this regard, also the benefits of parallel computing are shown. Taking for example `{foreach}`, the execution time was reduced from sequential computing to using 80 cores by 96.4%. It also presents a major improvement over using my local machine where a maximum of 16 logical cores can be used (`{foreach}`: roughly 3x faster). For each number of cores, `{foreach}` performs the operations the fastest among the three parallel R frameworks, in particular for a lower number of cores. Interestingly, for 80 cores,  `{foreach}` is only marginally faster than `{future}`. Also it stands out that, `{parallel}` performs relatively slow for a high number of allocated cores.
+
+
+> Can you say which number of cores uses the resources most efficiently? Why?
+
+Generally, the *.out* files above indicate that for each number of cores, the requested time (CPU) and memory resources were used efficiently as these were adapted for each time. Apart from that, it might be insightful to compare the resource efficiency of the numbers of cores by setting the execution times in relation to the cores and the requested memory (as this was always close to used memory). The following table shows the average execution time and requested memory per number of cores whereas the averages were computed across all employed frameworks.
+
+Number of (logical) cores | Avg. execution time | Avg. execution time * number of physical cores | Avg. requested memory
+-------------------- | ------------- | ------------- | -------------
+1 core (sequential; part 1) | 417.04 sec. | 417.04 | **0.375 GB**
+2 cores | 333.83 sec. | 333.83 | 0.810 GB
+4 cores | 153.94 sec. | 307.88 | 1.396 GB 
+10 cores | 60.96 sec. | **304.8** | 3.026 GB 
+16 cores (part 2) | 48.49 sec. | 387.92 | 4.690 GB 
+20 cores | 45.48 sec. | 454.8 | 5.663 GB 
+40 cores | 31.13 sec. | 622.6 | 10.550 GB 
+80 cores | **20.64 sec.** | 825.6 | 18.716 GB 
+
+Comparing the different number of cores, it is obvious that the lowest number of cores (i.e. 1) required the lowest memory but entailed the longest computation time while the highest number of cores (i.e. 80) achieved the shortest computation time but with the largest average requested memory. This is exactly what parallel computing makes use of. 
+
+Multiplying the number of *physical* cores (logical cores / 2, but for one logical core: 1) with the average execution time, one can determine a relative measure between the two criteria. There, *10 cores*  yield the lowest index which is slightly lower than the one of *4 cores*. Taking also into account the average requested memory, it might be even more efficient to use the latter number of logical cores, as the index is only slightly worse but one needs less than half of the memory compared to *10 cores*. On the other hand, the average execution time decreases by roughly 60%. So depending on the preference for lower execution times or lower memory, 10 or 4 cores, respectively, might use the most efficient combination of resources (time, cores and memory). Considering 10 cores, the execution time is only 3x as high compared to *80 cores* but it requires only 16% of the average memory.
+
+Also this table shows that the execution time decreases when going from 20 to 80 cores, but not as significant as when going from 1 to 20 cores (index also increases significantly from 20 to 80 cores). In addition, 80 cores require very much memory (more than available on my local machine) compared to 20 cores. Hence, one can state that in this use case already few additional cores provide big gains in efficiency for parallel computing while the relative improvement by adding cores decreases. Using *80 cores* might only be recommmendable if the execution time is crucial compared to the other resources.
+
+
+# Exercise 5: Spark
+
+In this exercise Spark (`{sparklyr}`) is used on a local cluster (my machine) to execute the following tasks.
+
+## 1. Establishing connection
+> Set up a connection to your local cluster.
+
+First, a Spark connection to my local cluster is set up using `sparklyr::spark_connect()`.
+
+```{r 5_1, echo=TRUE}
+sc <- spark_connect(master = "local")
+```
+
+## 2. "Importing" raw data
+> “Import” the dataset flights_2013_05.csv, without loading it into Spark memory.
+
+Next, the dataset of interst is loaded, however, not into Spark memory but on disk by specifying `memory = F`. The resulting Spark table is called *flights*. Then, all variable names of the dataset are printed.
+
+```{r 5_2, echo=TRUE}
+spark_flights <- spark_read_csv(sc, name = "flights", "data.nosync/flights_2013_05.csv", memory = F)
+
+colnames(spark_flights)
+```
+
+## 3. Cleaning data
+> Remove all variables starting with “Div”, as well as all missing values in the variables DepDelay, ArrDelay, and Distance. Load the resulting object into Spark (!) memory. In how many partitions is the table cached in memory?
+
+To preprocess the dataset, all variables starting with *Div* are identified via regular expressions. Then, those columns as well as all missing values in the variables *DepDelay*, *ArrDelay*, and *Distance* are removed using standard `{dplyr}` syntax. Finally, the resulting object can be loaded into Spark memory by calling `compute()` and naming the resulting Spark table *clean*.
+
+```{r 5_3, echo=TRUE}
+var_div <- grep("^Div", colnames(spark_flights), value = T)
+clean <- spark_flights %>%
+  select(-var_div) %>%
+  filter(!is.na(DepDelay) & !is.na(ArrDelay) & !is.na(Distance)) %>%
+  compute("clean")
+```
+
+To determine in how many partitions the table is cached in memory, one can use the web interface of the Spark cluster.
+
+```{r 5_3_2, eval=FALSE, include=TRUE}
+spark_web(sc)
+```
+
+There, via the *storage* tab, one can identify the following entry:
+
+![Figure 1: Storage of the *clean* table using Spark](Spark_Screenshot.png)
+
+Hence, the table *clean* is cached in 8 partitions in Spark memory.
+
+
+## 4. Some descriptive statistics with the cleaned dataset
+
+Next, some descriptive statistics of the cleaned dataset are computed by accessing the Spark memory (not loading the object into R memory).
+
+First, again, all variable names are printed.
+
+```{r 5_4_1, echo=TRUE}
+colnames(clean)
+```
+
+Here, it can be seen that all variables starting with *Div* were successfully removed.
+
+Then, the number of observations of the dataset can be determined using `dplyr::count()`.
+
+```{r 5_4_2, echo=TRUE}
+count(clean)
+```
+Hence, the cleaned dataset contains 2,567,713 observations.
+
+To compute numerical summaries of certain columns, the function `sparklyr::sdf_describe()` can be used.
+
+```{r 5_4_3, echo=TRUE}
+clean %>%
+  sdf_describe(c("DepDelay", "ArrDelay", "Distance"))
+```
+
+
+Next a contingency table between the origin state and the weekday is constructed by calling `sparklyr::sdf_crosstab()`.
+
+```{r 5_4_4, echo=TRUE}
+clean %>%
+  sdf_crosstab("OriginState", "DayOfWeek") 
+```
+Finally, the values of *ArrDelay* are plotted using a histogram via `dbplot::dbplot_histogram()`.
+
+```{r 5_4_5, echo=TRUE}
+clean %>%
+  dbplot_histogram(ArrDelay)
+```
+
+Here, it can be seen that the large majority of flights had arrival delays close to zero, but there were also extreme outliers with huge delays (with a maximum of 1,783, as can be seen in the summary table above).
+
+## 5. Modeling arrival delay
+
+Finally, `{sparkly}` is used to model the arrival delay. For this purpose, the dataset is split randomly into training and test set (ratio 70/30) while ensuring replicability by setting the seed to 42.
+
+```{r 5_5_1, echo=TRUE}
+partitions <- clean %>%
+  sdf_random_split(weights = c(training = 0.7, test = 0.3), seed = 42)
+```
+
+First, a linear regression is implemented to use the training set to predict the arrival delay from the departure delay and distance. The resulting model is then evaluated on the test set by computing the MSE. To train the model, `ml_linear_regression()` from `{sparklyr}` is used.
+
+```{r 5_5_lm, echo=TRUE}
+lm_model <- partitions$training %>%
+  ml_linear_regression(ArrDelay ~ DepDelay + Distance)
+lm_pred <- ml_predict(lm_model, partitions$test)
+ml_regression_evaluator(lm_pred, label_col = "ArrDelay", metric_name = "mse")
+```
+
+Second, the same problem is evaluated with a random forest model (`ml_random_forest()`). Also here, the training data is used to train the model which is subsequently evaluated using the MSE of the prediction on the test set.
+
+```{r 5_5_rf, echo=TRUE}
+rf_model <- partitions$training %>%
+  ml_random_forest(ArrDelay ~ DepDelay + Distance)
+rf_pred <- ml_predict(rf_model, partitions$test)
+ml_regression_evaluator(rf_pred, label_col = "ArrDelay", metric_name = "mse")
+```
+
+Comparing the MSEs, it can be seen that the linear regression performs better on this task which might be surprising given the more sophisticated nature of random forest models (also different to the results in exercise 4).
+
+> When running the linear regression: How many jobs, stages and tasks does Spark compute in the background?
+
+![Figure 2: Jobs, stages and tasks in Spark when running a linear regression](Spark_LR.png)
+
+Considering only the computation of the linear regression (not the prediction and evaluation), Spark computed 11 jobs with in total 17 stages and 47 tasks (see picture) in the background. With the the easy integration of Spark into R via `{sparklyr}`, this demonstrates the benefit of using Spark as the user can easily implement, for example, machine learning models while Spark does most of the work in the background.
+
+## 6. Disconnecting from Spark 
+
+Finally, it is important to disconnect from the Spark cluster by executing `sparklyr::spark_disconnect()`.
+
+```{r 5_6, echo=TRUE}
+spark_disconnect(sc)
+```

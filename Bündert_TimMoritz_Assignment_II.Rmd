@@ -1,0 +1,1005 @@
+---
+title: "Assignment II: Working locally with massive data"
+author: "Submitted by Tim-Moritz Bündert (Student ID: 5635975)"
+date: "June 13, 2021"
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I hereby assure that my submission is in line with the *Examination and Assessment Honor Code* outlined on the lecture slides and below:
+
+### Examination and Assessment Honor Code
+
+All members of the School of Business and Economics at the University of Tübingen (faculty, students, and alumni) share a commitment to honesty and integrity. In particular, all members follow the standards of scholarship and professionalism in all examinations and assessments.
+
+By submitting these assignments, students agree to comply with this Examination and Assessment Honor Code.
+
+Students who violate this Honor Code are in breach of this agreement and are subject to sanctions imposed by the School of Business and Economics, the University and its responsible bodies (e.g., the board of examiners (“Prüfungsausschuss”)).
+
+1. All members of the School of Business and Economics at the University of Tübingen (faculty, students, and alumni) have the obligation to report known violations to the responsible bodies (e.g., the board of examiners (“Prüfungsausschuss”) or the Dean of Programs)
+2. You must not represent another’s work as your own
+3. You must not receive inadmissible assistance of any sort before, during, or after an examination or other forms of course work that is subject to assessment by faculty members
+4. You must not provide inadmissible assistance of any sort before, during, or after an examination or other forms of course work that is subject to assessment by faculty members
+5. Violations of this Honor Code will be handled according to the rules and regulations laid out in the rules for this course
+
+
+## General setup
+
+Before I start the project, I install (if necessary) and load the packages that are needed for the assignment.
+
+```{r script_header, message=FALSE, warning = FALSE}
+# Check if packages have been installed before; if not, install them
+if (!require("ff")) install.packages("ff"); library(ff)
+if (!require("ffbase")) install.packages("ffbase"); library(ffbase)
+if (!require("bigmemory")) install.packages("bigmemory"); library(bigmemory)
+if (!require("tidyverse")) install.packages("tidyverse"); library(tidyverse)
+if (!require("biganalytics")) install.packages("biganalytics"); library(biganalytics)
+if (!require("bigtabulate")) install.packages("bigtabulate"); library(bigtabulate)
+if (!require("profvis")) install.packages("profvis"); library(profvis)
+if (!require("data.table")) install.packages("data.table"); library(data.table)
+if (!require("fixest")) install.packages("fixest"); library(fixest)
+if (!require("disk.frame")) install.packages("disk.frame"); library(disk.frame)
+if (!require("lfe")) install.packages("lfe"); library(lfe)
+```
+
+Next, I make my hardware and software specs transparent:
+
+```{r specs}
+sessionInfo()
+Sys.info()                              # Operating system
+parallel::detectCores(logical = FALSE)  # CPU cores
+benchmarkme::get_ram()                  # RAM
+```
+
+
+# Exercise 1: Download your own big dataset
+> Write an R script to automatically download all monthly airline data (by using the download link), starting from the year 1988, up until the size of the downloaded data is at least equal to the RAM of your local machine.
+
+Given that my local machine has 17.2 GB of RAM and assuming a minimum file size of 170 MB per month, 102 months are required such that the overall downloaded data exceeds the RAM with certainty. Therefore, in a first step, the required strings of the format *yyyy_mm* are constructed for the 102 months such that they can be pasted into the download link, starting in 1988.
+
+```{r 1_download1, eval=FALSE, include=TRUE}
+n_months <- ceiling(17.2/0.170)
+url_end <- vector("list", length = n_months)
+
+counter <- 1
+for (y in 1988:2021) {
+  for (m in 1:12) {
+    if (counter > n_months) break
+    url_end[counter] <- paste0(y, "_", m)
+    counter = counter + 1
+  }
+}
+```
+
+Next, the monthly airline data is automatically downloaded using the constructed URL (base + ending) and the file is unzipped. For good practices, the system waits five second after each download to not overload the website.
+
+```{r 1_download2, eval=FALSE, include=TRUE}
+for (y_m in url_end){
+  url_data = paste0("https://transtats.bts.gov/PREZIP/On_Time_Reporting_Carrier_On_Time_Performance_1987_present_", y_m, ".zip")
+  download.file(url_data, paste0("data.nosync/", y_m, ".zip"), method = "curl")
+  unzip(paste0("data.nosync/", y_m, ".zip"), exdir = "data.nosync/extr")
+  Sys.sleep(5)
+}
+```
+
+
+# Exercise 2: Generate a massive dataset from the monthly files
+> Combine all downloaded monthly datasets into one massive .csv file.
+
+Next, all the individual airline files are combined into one large file without loading the data fully into memory. For this purpose, the `{ff}` package is used. After setting up the system by setting the path where to store the binary flat file chunks of the dataset, the first month is used as a base set. Subsequently, all other monthly files are imported via `ff::read.csv.ffdf()` and appended to the existing file using `ff::ffdfappend()`. Finally, the massive file **flights_17_2GB** is exported as a csv-file using the `{ff}` package once again.
+
+```{r 2_combine, eval=FALSE, include=TRUE}
+options(fftempdir = "data.nosync/ffdf")
+
+flights_17_2GB <- read.csv.ffdf(file = paste0("data.nosync/extr/On_Time_Reporting_Carrier_On_Time_Performance_(1987_present)_", url_end[1], ".csv"), sep = ",", VERBOSE = TRUE, header = TRUE, next.rows = 100000, colClasses = NA)
+
+for (y_m in url_end[-1]){
+  flights <- read.csv.ffdf(file = paste0("data.nosync/extr/On_Time_Reporting_Carrier_On_Time_Performance_(1987_present)_", y_m, ".csv"), sep = ",", VERBOSE = TRUE, header = TRUE, next.rows = 100000, colClasses = NA)
+  
+  flights_17_2GB <- ffdfappend(flights_17_2GB, flights, adjustvmode = F)
+}
+
+write.csv.ffdf(flights_17_2GB, "data.nosync/extr/flights_17_2GB.csv", VERBOSE = T)
+```
+
+After combining the monthly airline data, the size of the massive dataset can be determined via `file.info()` such that the data is not loaded into R.
+
+```{r 2_show, echo=TRUE}
+file.info("data.nosync/extr/flights_17_2GB.csv")$size * 1e-9 # convert from Bytes to Gigabytes
+```
+
+Hence, this massive file (19.4 GB) is exceeds my local machine's RAM (17.2 GB) significantly.
+
+# Exercise 3: Import the large flights dataset
+> “Import” the large flights dataset as flights_ff, using a data structure which does not load it into memory.
+
+Next, this massive dataset can be imported into R as **flights_ff** using the `{ff}` structure such that is is not loaded into memory.
+
+```{r 3_load, echo=TRUE}
+flights_ff <- read.csv.ffdf(file = "data.nosync/extr/flights_17_2GB.csv",
+                            header = TRUE, next.rows = 500000, colClasses = NA)
+
+dim(flights_ff)
+```
+
+Hence, we can see that this massive dataset contains 43,906,554 rows and 110 columns.
+
+
+# Exercise 4: Cleaning and removing unnecessary data
+> Find and remove all variables concerning Diverted Airport Information (start with “Div”). Remove all observations with missing values in the departure delay variable.
+
+In the next step, this massive dataset is reduced by cleaning and removing unnecessary data. This is done by first finding all variables concerning Diverted Airport Information (starting with *“Div”*) using regular expressions, i.e. `grep()`. Then, `ff::subset.ffdf()` is used to remove those variables as well as all observations with missing values in *DepDelay*. The resulting cleaned object is called **fff_clean**.
+
+```{r 4_removeDiv, echo=TRUE}
+var_div <- grep("^Div", names(flights_ff), value=TRUE)
+fff_clean <- subset.ffdf(flights_ff, select = !(names(flights_ff) %in% var_div), subset = !is.na(DepDelay))
+
+dim(fff_clean)
+```
+
+Next, it can be checked that there are indeed no missing values in the departure delay variable.
+
+```{r 4_NAs, echo=TRUE}
+sum(is.na(fff_clean$DepDelay)) == 0
+```
+
+Hence, building this subset worked.
+
+```{r 4_quietRemove, include=FALSE}
+rm(flights_ff) # remove object as not needed anymore to free up memory
+```
+
+
+# Exercise 5: Descriptive statistics out-of-memory
+> Plot a histogram for the departure delay.
+
+An out-of-memory histogram can be implemented using the `ffbase::hist.ff()` function and supplying the respective column, i.e. *DepDelay*.
+
+```{r 5_descrStats, echo=TRUE}
+hist.ff(fff_clean$DepDelay)
+
+min(fff_clean$DepDelay)
+max(fff_clean$DepDelay)
+```
+
+Here, it can be observed that most of the flights had a departure delay close to zero. However, the x-axis covers a wide range because there were single flights with extreme depature delays, both in the positive and negative direction (see maximum and minimum of *fff_clean$DepDelay*).
+
+> Display the number of flights that originate from each state. From which state do the most flights originate?
+
+To determine the number of flights that originate from each state, the function `ff::table.ff()` can be used to construct a contingency table.
+
+```{r 5_descrStats21, echo=TRUE}
+flights_state <- table.ff(fff_clean$OriginStateName)
+knitr::kable(flights_state, col.names = c('State', 'Frequency'), caption = "Number of flights per origin state")
+```
+
+Based on this table, the state from which the most flights originate can be returned.
+
+```{r 5_descrStats22, echo=TRUE}
+flights_state[which.max(flights_state)]
+```
+
+> For each quarter of the year, compute the overall distance of all flights.
+
+For this task, `ffbase::ffdfdply()` can be used to group the data by the quarters 1, 2, 3 and 4 and then compute the overall distance by summing the individual ones up.
+
+```{r 5_descrStats3, echo=TRUE, warning=FALSE}
+options(dplyr.summarise.inform = FALSE)
+
+ffdfdply(fff_clean, split = fff_clean$Quarter,
+         FUN = function(x) { x %>%
+             group_by(Quarter) %>%
+             summarise(sum_distance = sum(Distance, na.rm = T))
+           },
+         trace = F)
+```
+
+Hence, it can be seen that the overall distance of all flights was highest in the second and lowest in the fourth quarter.
+
+# Exercise 6: Aggregating data
+> Aggregate the data to the origin-airport flight-date level, to an object called originlevel.
+
+To aggregate the data, again `ffbase::ffdfdply()` is implemented. As the split argument, both the variable *Origin* and *FlightDate* could be used, but as there are most certainly less origin airports than flight dates in the period under consideration, using *Origin* will reduce the computation time as this leads to less splits. Also, the date variables can be included in the grouping since *FlightDate* already uniquely characterizes the date. Hence, only the other five variables of interest need do be aggregated using the most common airline and the respective averages.
+
+```{r 6_aggregate, echo=TRUE, warning=FALSE}
+options(dplyr.summarise.inform = FALSE)
+
+originlevel <- ffdfdply(fff_clean, split = fff_clean$Origin,
+                        FUN = function(x) { x %>%
+                            group_by(Origin, FlightDate, Year, Quarter, Month, DayofMonth, DayOfWeek) %>%
+                            summarise(top_airline = sort(table(Reporting_Airline, useNA = "no"), decreasing = TRUE)[1],
+                                      mean_dep_delay = mean(DepDelay, na.rm = T),
+                                      mean_arr_delay = mean(ArrDelay, na.rm = T),
+                                      mean_elapsed_time = mean(ActualElapsedTime, na.rm = T),
+                                      mean_distance = mean(Distance, na.rm = T)
+                                      )},
+                        trace = F)
+
+dim(originlevel)
+```
+
+Here, it can be seen that the aggregation significantly reduced the size of the dataset from roughly 43 million to roughly 700,000 rows. 
+Conducting the aggregation, the most activity in the Activity Monitor can be observed in the CPU with a utilization of close to 100%. However, the memory is not increasing significantly due to this operation which highlights the benefits of using `{ffbase}` for this task.
+
+```{r 6_quietRemove, include=FALSE}
+rm(fff_clean) # remove object as not needed anymore to free up memory
+```
+
+# Exercise 7: Back to RAM
+> Now, load the (much smaller) aggregated dataset into RAM (name: originlevel_df). How large is the object size now?
+
+Using the aggregated dataset **originlevel**, it can be loaded into RAM by converting it into the data frame **originlevel_df**. Then, the object size is determined using `object.size()` and finally, it is verified that the aggregation was successful by comparing the number of unique date-origin pairs to the number of rows. Both quantities should be equal in case the aggregation was conducted successfully.
+
+```{r 7_RAM, echo=TRUE}
+originlevel_df <- as.data.frame(originlevel)
+print(object.size(originlevel_df), units = "auto")
+
+nrow(unique(originlevel_df[c("FlightDate","Origin")])) == nrow(originlevel_df)
+```
+
+Not only can be seen that the object size is now comparably small, but also that the aggregation lead to unique origin-date combinations.
+
+> Estimate a linear regression model.
+
+Next, a linear regression model is estimated based on the aggregated dataset. Specifically, arrival delay is regressed on the weekday, airtime, distance, departure delay, and the top airline. While this could be implemented using the standard `lm()` function, `fixest::feols())` is chosen here instead as it was shown in the last assignment that its performance is really competitive.
+
+```{r 7_RAM2, echo=TRUE}
+model <- feols(mean_arr_delay ~ as.factor(DayOfWeek) + mean_elapsed_time + mean_distance + mean_dep_delay + as.factor(top_airline), data = originlevel_df) 
+coefficients(model)
+```
+
+Hence, this model indicates that distance is negatively related to arrival delay with a coefficient of -0.038115. This can be interpreted as the following: the longer the distance, the lower the arrival delay (potentially, because the flight can catch up due to the longer the distance).
+
+# Exercise 8: Creating a numeric dataset for later analysis
+> “Import” the full (= size of RAM) version of the flights data. Select only the following numeric columns into an object called flights_num.
+
+Here, the massive dataset created in task 2 is loaded (not into RAM) using `ff::read.csv.ffdf()`. Then, the numeric variables which shall be kept are defined in a list and finally, the object **flights_num** is created by subsetting the original data using only these numeric variables.
+
+```{r 8_num, eval=FALSE, include=TRUE}
+flights_full <- read.csv.ffdf(file = "data.nosync/extr/flights_17_2GB.csv", 
+                              header = TRUE, next.rows = 500000, colClasses = NA)
+
+num_vars <- c('Year', 'Quarter', 'Month', 'DayofMonth', 'CRSDepTime', 'DepTime', 
+             'DepDelay', 'CRSArrTime', 'ArrTime', 'ArrDelay', 'CRSElapsedTime', 
+             'ActualElapsedTime', 'Distance')
+
+flights_ff_num <- subset.ffdf(flights_full, select = num_vars)
+```
+
+
+> Export the resulting data structure - containing only numeric variables - to a csv file called flights_num.csv.
+
+To export **flights_ff_num** to a csv-file, the function `ff::write.csv.ffdf()` is used.
+
+```{r 8_num2, eval=FALSE, include=TRUE}
+write.csv.ffdf(flights_ff_num, "data.nosync/flights_num.csv")
+```
+
+
+# Exercise 9: Importing with `{bigmemory}`
+> “Import” the numeric data as a big.matrix, call it flights_bm. Make sure you have to do the full importing process only once. Also import the dataset in a standard way (into RAM) for later comparison, name it flights_num
+
+To import the created csv file **flights_num.csv**, the package `{bigmemory}` is used, specifically, `bigmemory::attach.big.matrix()`. By specifying the *backingfile* and *descriptorfile*, filebacking is implemented and hence, the data needs to be fully imported only once.
+
+```{r 9_import, eval=FALSE, include=TRUE}
+flights_bm <- read.big.matrix("data.nosync/flights_num.csv", header = TRUE, type = "integer",
+                              backingfile = "flights_num.bin", descriptorfile = "flights_num.desc", 
+                              backingpath = paste0(getwd(),"/data.nosync"))
+```
+
+Therefore, we need only to run the following command to *“import”* the numeric data as a `big.matrix`. 
+
+```{r 9_import2, echo=TRUE}
+flights_bm <- attach.big.matrix("data.nosync/flights_num.desc")
+```
+
+In addition, the dataset is also read into RAM in a standard way using `data.table::fread()`.
+
+```{r 9_import3, echo=TRUE}
+flights_standard <- fread("data.nosync/flights_num.csv") 
+```
+
+
+# Exercise 10: Descriptive statistics
+> For each question, profile your code to compare the memory-efficient function with one standard alternative, both in terms of (overall) memory and speed.
+
+## 10.1: Longest flight in dataset
+
+> What was the actually longest flight in terms of time? How long did it last?
+
+As this is a rather quick operation which cannot be well analyzed with `profvis::profvis()`, first, the equivalence in terms of results of the `{bigmemory}` and the standard method are shown and second, both approaches are compared with regard to their time and memory performance.
+
+### `{bigmemory}`
+
+As one can identify on page 18 of the `{bigmemory}` documentation, `big.matrix` elements can be extracted via a syntax similar to `{data.table}` (i.e., `x[i, j, drop]`). Hence, the longest flight can be retrieved using the following operation.
+
+```{r 10_DesStats11, echo=TRUE}
+flights_bm[which.max(flights_bm[,"ActualElapsedTime"]),]
+```
+
+### Standard alternative
+
+Using `{data.table}` and the **flights_standard** which was fully loaded into RAM, a similar syntax applies.
+
+```{r 10_DesStats12, echo=TRUE}
+flights_standard[which.max(flights_standard$ActualElapsedTime),]
+```
+Hence, both approaches yield the same result indicating that a flight on November 25, 1989 was the longest flight with a duration of 1,440 minutes.
+
+### Performance comparison
+After showing that both methods yield the same results, they are compared with regard to their time and memory performance.
+
+```{r 10_DesStats13, echo=TRUE}
+microbenchmark::microbenchmark(flights_bm[which.max(flights_bm[,"ActualElapsedTime"]),], 
+                               flights_standard[which.max(flights_standard$ActualElapsedTime),])
+``` 
+
+With regard to the elapsed time, the standard approach performs the operations (on average) roughly twice as fast as the `{bigmemory}` method. 
+
+Next, the memory usage of both methods are profiled.
+
+```{r 10_DesStats14, echo=TRUE}
+Rprof("Rprof_table_longestFlight_BM.out", memory.profiling = TRUE)
+
+x <- flights_bm[which.max(flights_bm[,"ActualElapsedTime"]),]
+
+Rprof(NULL)
+summary_out <- summaryRprof("Rprof_table_longestFlight_BM.out", memory = "tseries", diff = FALSE)
+summary_out$mem.used <- (summary_out$vsize.small + summary_out$vsize.large) / 1024 / 1024
+max(summary_out$mem.used) - min(summary_out$mem.used)
+```
+
+
+
+```{r 10_DesStats15, echo=TRUE}
+Rprof("Rprof_table_longestFlight_standard.out", memory.profiling = TRUE)
+
+x <- flights_standard[which.max(flights_standard$ActualElapsedTime),]
+
+Rprof(NULL)
+summary_out <- summaryRprof("Rprof_table_longestFlight_standard.out", memory = "tseries", diff = FALSE)
+summary_out$mem.used <- (summary_out$vsize.small + summary_out$vsize.large) / 1024 / 1024
+max(summary_out$mem.used) - min(summary_out$mem.used)
+```
+
+Here, we can see that both methods require roughly the same minor amount of memory to perform this operation. This is not surprising given this is a rather small operation.
+
+## 10.2: Most frequent quarter of the observation period
+
+> Which quarter in which year has the most observations?
+
+Similar to 10.1, this is a rather quick operation which cannot be not reasonably well analyzed by `profvis::profvis()`. Hence, both approaches are first compared in terms their results, before their time and memory performances are taken into account.
+
+### `{bigmemory}`
+
+Here, the function `bigtabulate::bigtable()` can be implemented to construct a contingency table of year-quarter pairs. Then, the maximum value is printed and the indices are returned.
+
+```{r 10_DesStats21, echo=TRUE}
+obs_quarter_year_bm <- bigtable(flights_bm, c("Year", "Quarter"))
+max(obs_quarter_year_bm)
+which(obs_quarter_year_bm == obs_quarter_year_bm[which.max(obs_quarter_year_bm)], arr.ind = T)
+```
+
+### Standard alternative
+
+Using `{data.table}`, *.N* can be used to count the occurrences per year-quarter pair. Subsequently, this table is ordered by the frequency and only the most frequent one is returned.
+
+```{r 10_DesStats22, echo=TRUE}
+flights_standard[, .N , by = .(Year, Quarter)][order(-N)][1]
+```
+
+Again, it can be seen that both methods yield the same results, that is the third quarter in 1990 has the most observations.
+
+
+### Performance comparison
+
+To compare the performances, the `{bigmemory}` approach is defined as a function to make the profiling easier.
+
+```{r 10_DesStats23, echo=TRUE}
+quarter_year_bm <- function() {
+  obs_quarter_year_bm <- bigtable(flights_bm, c("Year", "Quarter")) 
+  max(obs_quarter_year_bm)
+  which(obs_quarter_year_bm == obs_quarter_year_bm[which.max(obs_quarter_year_bm)], arr.ind = T)
+}
+
+microbenchmark::microbenchmark(quarter_year_bm(),
+                               flights_standard[, .N , by = .(Year, Quarter)][order(-N)][1],
+                               times = 10)
+```
+
+
+
+```{r 10_DesStats24, echo=TRUE}
+Rprof("Rprof_table_QuarYear_bm.out", memory.profiling = TRUE)
+
+x <- quarter_year_bm()
+
+Rprof(NULL)
+summary_out <- summaryRprof("Rprof_table_QuarYear_bm.out", memory = "tseries", diff = FALSE)
+summary_out$mem.used <- (summary_out$vsize.small + summary_out$vsize.large) / 1024 / 1024
+max(summary_out$mem.used) - min(summary_out$mem.used)
+```
+
+
+
+```{r 10_DesStats25, echo=TRUE}
+Rprof("Rprof_table_QuarYear_standard.out", memory.profiling = TRUE)
+
+x <- flights_standard[, .N , by = .(Year, Quarter)][order(-N)][1]
+
+Rprof(NULL)
+summary_out <- summaryRprof("Rprof_table_QuarYear_standard.out", memory = "tseries", diff = FALSE)
+summary_out$mem.used <- (summary_out$vsize.small + summary_out$vsize.large) / 1024 / 1024
+max(summary_out$mem.used) - min(summary_out$mem.used)
+```
+
+Here, we can see that `{bigmemory}` requires significantly less memory than the standard alternative while it is inferior in terms of computation time. However, this is not surprising as the main advantage of `{bigmemory}` rather lies in its memory usage.
+
+## 10.3: Indexing and average elapsed time for specific days in a year
+
+> Use an elegant way of indexing which allows high-performance comparisons with no memory overhead.
+Check the {bigmemory} documentation for the appropriate function and implement it to answer the following tasks.
+
+Different to the previous two subtasks, `profvis::profvis()` can now be used to profile memory and time consumption because these operations are larger and can be therefore easier taken apart by `profvis()`.
+
+### `{bigmemory}`
+
+In the documentation, one can find the function `bigmemory::mwhich()` returns the indices of the observations which satisfy the specified criteria. Hence, this perfectly matches the desired operation.
+
+```{r 10_DesStats31, echo=TRUE}
+profvis({
+  ind_first_day <- mwhich(flights_bm, "DayofMonth", 1, "eq")
+}, simplify = F)
+
+ind_first_day[1:5]
+```
+
+Accordingly, the first five indices which refer to the first day of a month can be observed.
+
+Next, this way of indexing can be used for comparing certain subsets. In a first step, the indices for Christmas and New Years Eve are retrieved. Second, **flights_bm[ind_christmas,]** would load the resulting structure into RAM. This can be circumvented by creating a *deepcopy* of the original **flights_bm** with only the selected rows which is then still a *big.matrix* object. Finally, `biganalytics::colmean()` can be used to compute the column mean of *ActualElapsedTime*.
+
+```{r 10_DesStats32, echo=TRUE}
+profvis({
+  # Step 1: determine indices
+  ind_christmas <- mwhich(flights_bm, 
+                          c("Month", "DayofMonth", "ActualElapsedTime"),
+                          list(12, 24, NA), 
+                          list('eq', 'eq', 'neq'), 
+                          'AND')
+  
+  ind_nye <- mwhich(flights_bm, 
+                    c("Month", "DayofMonth", "ActualElapsedTime"),
+                    list(12, 31, NA), 
+                    list('eq', 'eq', 'neq'), 
+                    'AND')
+  
+  # Step 2: create respective subset based on indices without loading into RAM
+  bm_christmas <- deepcopy(flights_bm, rows = ind_christmas)
+  bm_nye <- deepcopy(flights_bm, rows = ind_nye)
+  
+  # Step 3: compute means of "ActualElapsedTime"
+  print(colmean(bm_christmas, "ActualElapsedTime"))
+  print(colmean(bm_nye, "ActualElapsedTime"))
+}, simplify = F)
+```
+
+Hence, the flights are on average longer on New Years Eve than on Christmas.
+
+### Standard alternative
+
+Using `{data.table}`, the row indices satisfying the conditions can be retrieved by subsetting the data table and specifying the argument `which = TRUE`.
+
+```{r 10_DesStats33, echo=TRUE}
+profvis({
+  ind_first_day_dt <- flights_standard[DayofMonth == 1 & !is.na(flights_standard$ActualElapsedTime), which = TRUE]
+}, simplify = F)
+
+ind_first_day_dt[1:5]
+```
+
+Here, the same first five indices are returned as using `{bigmemory}`. It can be seen that this was done using less time but requiring significantly more memory.
+
+Basically, the indices could be retrieved as shown and then used to subset the data table. A more direct way of doing so and, at the same time, also computing the average value is shown below.
+
+```{r 10_DesStats34, echo=TRUE}
+profvis({
+  print(flights_standard[Month == 12 & DayofMonth == 24 & !is.na(ActualElapsedTime), .(mean_time = mean(ActualElapsedTime))])
+  print(flights_standard[Month == 12 & DayofMonth == 31 & !is.na(ActualElapsedTime), .(mean_time = mean(ActualElapsedTime))])
+}, simplify = F)
+```
+
+Again, both approaches yield the same results which is that the flights are on average the longest on New Years Eve (114.34 min.), followed by Christmas (113.1 min.).
+
+With regard to the performance, using `{bigmemory}` performed in this case the operation faster than the standard approach. However, the main advantage can be identified in the memory usage which is very significantly lower for `{bigmemory}` and demonstrates, once again, its advantages.
+
+
+> Think of two other interesting questions you can answer with multiple 
+comparisons. Use at least three different comparison operators and use the 
+memory-efficient function to answer the questions from the flights data.
+
+Next, two further questions will be investigated.
+
+## EXTRA 10.4: Distance of short-haul flights
+
+Here, it is evaluated whether the average and total distance of short-haul flights (defined as flights with distances up to 1,000 miles) has increased over the years. For that, the months December 1988 and December 1994 are compared.
+
+### `{bigmemory}`
+
+Again, the conditions can be implemented using `bigmemory::mwhich()` and with the same steps as in 10.3.
+
+```{r 10_DesStats41, echo=TRUE}
+profvis({
+  # Step 1: determine indices
+  ind_12_88 <- mwhich(flights_bm, 
+                    c("Month", "Year", "Distance"),
+                    list(12, 1988, 1000), 
+                    list('eq', 'eq', 'le'), 
+                    'AND')
+
+  
+  ind_12_94 <- mwhich(flights_bm, 
+                    c("Month", "Year", "Distance"),
+                    list(12, 1994, 1000),
+                    list('eq', 'eq', 'le'), 
+                    'AND')
+  
+  # Step 2: create respective subset based on indices without loading into RAM
+  bm_12_88 <- deepcopy(flights_bm, rows = ind_12_88)
+  bm_12_94 <- deepcopy(flights_bm, rows = ind_12_94)
+
+  # Step 3: compute means and sums of "Distance"
+  print(colsum(bm_12_88, "Distance"))
+  print(colmean(bm_12_88, "Distance"))
+  
+  print(colsum(bm_12_94, "Distance"))
+  print(colmean(bm_12_94, "Distance"))
+}, simplify = F)
+```
+
+
+### Standard alternative
+
+Using `{data.table}`, the conditions can be implemented by constructing the respective subsets and subsequently, calculating the average and overall distance.
+
+```{r 10_DesStats42, echo=TRUE}
+profvis({
+  print(flights_standard[Month == 12 & Year == 1988 & !is.na(Distance) & Distance <= 1000, .(mean_distance = mean(Distance), sum_distance = sum(Distance))])
+  print(flights_standard[Month == 12 & Year == 1994 & !is.na(Distance) & Distance <= 1000, .(mean_distance = mean(Distance), sum_distance = sum(Distance))])
+}, simplify = F)
+```
+
+Both approaches yield the same results, indicating that the total distance of short-haul flights increased by roughly 5% and the respective average distance by roughly 8%. This tendency was expected given the increase of flights over the years. What is more interesting, is the significant superior performance in terms of time and in particular regarding memory usage of `{bigmemory}` compared to the standard alternative.
+
+
+## EXTRA 10.5: Arrival delay for different depature intervals
+
+In this additional evaluation, it is investigated whether the average arrival delay differs with regard to the departure time for short flights (defined as the ones with a duration of up to one hour). For this analysis, the departure time is split up into three intervals: 0-8, 8-16 and 16-24 o'clock.
+
+### `{bigmemory}`
+
+Similar to the previous two subtasks, the respective indices satisfying the conditions can be retrieved using `bigmemory::mwhich()`. Then, the data is subset and the average arrival delay is computed.
+
+```{r 10_DesStats51, echo=TRUE}
+profvis({
+  # Step 1: determine indices
+  ind_00_08 <- mwhich(flights_bm, 
+                      c("DepTime", "DepTime", "ActualElapsedTime", "ArrDelay"),
+                      list(0, 800, 60, NA), 
+                      list('ge', 'lt', 'le', 'neq'), 
+                      'AND')
+
+  ind_08_16 <- mwhich(flights_bm, 
+                      c("DepTime", "DepTime", "ActualElapsedTime", "ArrDelay"),
+                      list(800, 1600, 60, NA), 
+                      list('ge', 'lt', 'le', 'neq'), 
+                      'AND')
+
+  ind_16_24 <- mwhich(flights_bm, 
+                      c("DepTime", "DepTime", "ActualElapsedTime", "ArrDelay"),
+                      list(1600, 2400, 60, NA), 
+                      list('ge', 'lt', 'le', 'neq'), 
+                      'AND')
+
+  
+  # Step 2: create respective subset based on indices without loading into RAM
+  bm_00_08 <- deepcopy(flights_bm, rows = ind_00_08)
+  bm_08_16 <- deepcopy(flights_bm, rows = ind_08_16)
+  bm_16_24 <- deepcopy(flights_bm, rows = ind_16_24)
+
+
+  # Step 3: compute means of "ActualElapsedTime"
+  print(colmean(bm_00_08, "ArrDelay"))
+  print(colmean(bm_08_16, "ArrDelay"))
+  print(colmean(bm_16_24, "ArrDelay"))
+}, simplify = F)
+```
+
+
+### Standard alternative
+
+Again, the constraints can be implemented in `{data.table}` by subsetting the data table **flights_standard**.
+
+```{r 10_DesStats52, echo=TRUE}
+profvis({
+  print(flights_standard[DepTime >= 0 & DepTime < 800 & !is.na(ArrDelay) & ActualElapsedTime <= 60, .(mean_arrDelay = mean(ArrDelay))])
+  print(flights_standard[DepTime >= 800 & DepTime < 1600 & !is.na(ArrDelay) & ActualElapsedTime <= 60, .(mean_arrDelay = mean(ArrDelay))])
+  print(flights_standard[DepTime >= 1600 & DepTime < 2400 & !is.na(ArrDelay) & ActualElapsedTime <= 60, .(mean_arrDelay = mean(ArrDelay))])
+}, simplify = F)
+```
+
+Both approaches result in the same average arrival delays which indicate that short flights departing in the early hours (0-8 o'clock) have the lowest average arrival delay, followed by the interval from 8-16 o'clock and finally, the interval from 16-24 o'clock. A reason for this might be the increased traffic and accumulation of delay over the day.
+Moreover, the standard approach is slightly faster, but `{bigmemory}` requires significantly less memory for this operation.
+
+
+# Exercise 11: Linear regression
+> Estimate a linear regression, predicting ActualElapsedTime from Distance, Month, Year, and DepDelay. Make sure that Month and Year enter the model as factor variables or dummies. Run three different methods, compare them in terms of speed and memory consumption
+
+Here, three different methods of estimating linear regression models are compared. One the one hand, `biganalytics::biglm.big.matrix()` is implemented which can use as an input a `big.matrix` object and is a wrapper to the `{biglm}` package introduced in the lecture which can chunk-wise update a linear regression model. With `biganalytics::biglm.big.matrix()`, however, this has not to be done manually. This is also why `biglm::biglm()` is not implemented here. Rather, the first method is compared to two methods working on the dataset **flights_standard** which was imported into RAM, specifically, `fixest::feols()` and `lfe::felm()`.
+
+## 11.1: `{biganalytics}`
+
+```{r 11_LR1, echo=TRUE}
+profvis({
+  m1 <- biglm.big.matrix(ActualElapsedTime ~ Distance + Month + Year + DepDelay, flights_bm, fc = c('Month', 'Year'))
+}, simplify = F)
+
+coefficients(m1)
+```
+
+
+## 11.2: `{fixest}`
+
+```{r 11_LR3, echo=TRUE}
+profvis({
+  m2 <- feols(ActualElapsedTime ~ Distance + DepDelay | as.factor(Month) + as.factor(Year), data = flights_standard)
+}, simplify = F)
+
+coefficients(m2)
+```
+
+## 11.3: `{felm}`
+
+```{r 11_LR4, echo=TRUE}
+profvis({
+  m3 <- felm(ActualElapsedTime ~ Distance + DepDelay | as.factor(Month) + as.factor(Year), data = flights_standard)
+}, simplify = F)
+
+coefficients(m3)
+```
+
+Hence. the same coefficients show that all three methods are equivalent in terms of their results. Next, their performance is taken into account.
+
+> Does your profiling show what you expected in terms of memory consumption? If not, why not? In which way is one function still superior in terms of memory consumption? Use another way of profiling to demonstrate this superiority.
+
+Considering the profiling results, it can be seen that `{biganalytics}` allocates and deallocates the most memory, in particular, more than `{fixest}`. This is probably due to the underlying usage of `{biglm}` and the chunk-wise loading, estimating and removing of the data. At first, this might not be expected as arguably the memory consumption is the main advantage of `{biganalytics}`. However, it is noteworthy, that the difference between allocated and deallocated memory is the smallest for `{biganalytics}`, hence the absolute memory consumption is the lowest. In addition, it performs the operations the fastest.
+
+Another way to demonstrate the benefit of `{biganalytics}` can be identified when comapring the sizes of the estimated model objects.
+
+```{r 11_comp, echo=TRUE}
+print(object.size(m1), units = "auto")
+print(object.size(m2), units = "auto")
+print(object.size(m3), units = "auto")
+```
+
+Here, the superiority of using `{biganalytics}` can be observed as the resulting model is really significantly smaller in terms of object size and hence, reduces the memory consumption.
+
+Next, the applicability of `{biglasso}` is evaluated. Reading the documentation, it is stated that the package is more suitable for *wide data (ultrahigh-dimensional, dimensions >> observations)* opposed to *long data (observations >> dimensions)* (p.3). This is because the model fitting algorithm takes advantage of sparsity assumption of high-dimensional data. However, the flights dataset is structured in a long format with 43,906,554 observations and only 13 variables. Hence, this data is not very sparse, but rather dense. Therefore, also referring to the documentation, this package is not suitable/useful for data structured like this flights dataset.
+
+```{r 11_quietRemove, include=FALSE}
+rm(m1) # remove object as not needed anymore to free up memory
+rm(m2)
+rm(m3)
+rm(flights_standard)
+```
+
+# Exercise 12: `{disk.frame}` 
+
+## Implementation
+
+> Look up the {disk.frame} package, which is a relatively recent development that can be used in similar situations as {ff} and {bigmemory}. Try to repeat steps 3-6, 8, 10, 11 with this package. Include the code and results in your submission. Are the results identical to the ones from the old approach?
+
+Next, the package `{disk.frame}` is used to repeat some of the previous tasks. In general, `{disk.frame}` is another package which deals with the issue of manipulating data which is too large to load it fully into memory (RAM). In this way, it aims to solve a similar problem as `{ff}` and `{bigmemory}`. To approach this problem, `{disk.frame}` splits the large dataset into smaller chunks which are separately stored in files on the disk (hard drive). Then, these chunks can be manipulated via an internal API. When it comes to manipulation, it then reads in and processes only one chunk at a time.
+
+
+### 12.3: Import the large flights dataset
+
+First, the massive dataset is loaded again into R, but not fully into RAM. For this, the respective csv file has to converted to a disk frame once such that it can create the separate chunks. This is done using `disk.frame::csv_to_disk.frame()`.
+
+```{r 12_31, eval=FALSE, include=TRUE}
+flights_disk_frame <- csv_to_disk.frame("data.nosync/extr/flights_17_2GB.csv",
+                                        outdir = "data.nosync/extr/tmp_flights.df", header = T,
+                                        in_chunk_size = 100000)
+```
+
+Once this has been done, it is sufficient in the next sessions to load the disk frame via loading the path which contains the individual chunks. 
+
+```{r 12_32, echo=TRUE}
+flights_disk_frame <- disk.frame("data.nosync/extr/tmp_flights.df")
+
+nrow(flights_disk_frame)
+ncol(flights_disk_frame)
+```
+
+Hence, we can see, due to the identical dimensions compared to task 3, that the importing was successful.
+
+### 12.4: Cleaning and removing unnecessary data
+
+Next, the data is cleaned in the same way as in task 4. Here it is important to highlight how `{disk.frame}` can be implemented to manipulate data. Basically, it can be used with both the `{disk.table}` and `{tidyverse}` syntax (specifically, `{dplyr}`-verbs) (see description of package, e.g. documentation p.1). When using the latter ones, it performs the operations "lazy." This means that it only loads the data into memory if one "collects" it using the `collect()`function. 
+
+Applying this to task 4, the dataset can be manipulated in the same way as above by finding the variables concerning *Diverted Airport Information* and removing them as well as all observations with missing values in *DepDelay*.
+
+```{r 12_41, echo=TRUE}
+var_div <- grep("^Div", names(flights_disk_frame), value=TRUE)
+flights_disk_frame_clean <- flights_disk_frame %>%
+  filter(!is.na(DepDelay)) %>%
+  select(-var_div)
+
+ncol(flights_disk_frame_clean)
+class(flights_disk_frame_clean)
+```
+
+The resulting object **flights_disk_frame_clean** is still a `disk.frame` and contains the desired number of columns. To verify that the row number is indeed as the one in task 4, one of the remaining columns can be collected.
+
+```{r 12_42, echo=TRUE}
+flights_disk_frame_clean_DD <- flights_disk_frame_clean %>%
+  select(DepDelay) %>%
+  collect
+
+nrow(flights_disk_frame_clean_DD)
+
+rm(flights_disk_frame_clean_DD) # remove object again to free memory space
+```
+
+Here, one can see that the row numbers agree and hence, `{disk.frame}` performs the operation as in task 4.
+
+
+### 12.5: Descriptive statistics out-of-memory
+
+In this first part of 12.5, a histogram of the values of the departure delay is constructed. To work memory-efficiently, one can only load the contingency table (created with `{tidyverse}` syntax) into RAM and base the histogram on this table.
+
+```{r 12_511, echo=TRUE, warning = FALSE}
+table_delays <- flights_disk_frame_clean %>% 
+  group_by(DepDelay) %>% 
+  summarise(n = n()) %>%
+  collect
+
+hist_delay <- list(breaks = table_delays$DepDelay, 
+                   counts = table_delays$n, 
+                   density = table_delays$n/diff(table_delays$DepDelay),
+                   xname = "DepDelay")
+class(hist_delay) <- "histogram"
+plot(hist_delay)
+```
+
+It can be a similar histogram to task 5.1 observed, with most values close to zero. Again, it checked for the largest and smallest value for the departure delay which lead to this wide range on the x-axis.
+
+```{r 12_512, echo=TRUE}
+min(hist_delay$breaks)
+max(hist_delay$breaks)
+``` 
+
+Here, again the same maximum and minimum as before can be identified
+
+
+In the next sub-part, the number of flights that originated from each state is displayed, using again the `{tidyverse}` syntax and just collecting the contingency table at the end.
+
+```{r 12_52, echo=TRUE}
+flights_origin_df <- flights_disk_frame_clean %>% 
+  group_by(OriginStateName) %>% 
+  summarise(n = n()) %>%
+  collect
+
+flights_origin_df
+```
+
+This yields the same table as in task 4 and equivalently, the state from which the most flights originated can be displayed.
+
+```{r 12_522, echo=TRUE}
+flights_origin_df %>%
+  arrange(desc(n)) %>%
+  head(1)
+```
+
+This yields again the result California with a total of 4,872,835 flights.
+
+
+Next, the overall distance of all flights are computed for each quarter of the year, analogous to before.
+
+```{r 12_53, echo=TRUE}
+flights_disk_frame_clean %>% 
+  group_by(Quarter) %>% 
+  summarise(sum_distance = sum(Distance, na.rm = T)) %>%
+  collect
+```
+
+As before, the results are identical to the ones from before.
+
+
+### 12.6: Aggregating data
+
+In this step, the data is aggregated to the origin-airport flight-date level using the `{data.table}`. Due to the structure of `{disk.frame}`, this has to be done in two steps: first, aggregating each chunk and second, aggregating all chunks.
+
+```{r 12_6, echo=TRUE}
+originlevel_disk_frame_1 <- flights_disk_frame_clean[, .(top_airline = sort(table(Reporting_Airline), decreasing = TRUE)[1],
+                                                         mean_dep_delay = mean(DepDelay, na.rm = T),
+                                                         mean_arr_delay = mean(ArrDelay, na.rm = T),
+                                                         mean_elapsed_time = mean(ActualElapsedTime, na.rm = T),
+                                                         mean_distance = mean(Distance, na.rm = T)),
+                                                   by = .(Origin, FlightDate, Year, Quarter, Month, DayofMonth, DayOfWeek)]
+
+originlevel_disk_frame_2 <- originlevel_disk_frame_1[, .(top_airline = sort(table(top_airline), decreasing = TRUE)[1],
+                                                         mean_dep_delay = mean(mean_dep_delay, na.rm = T),
+                                                         mean_arr_delay = mean(mean_arr_delay, na.rm = T),
+                                                         mean_elapsed_time = mean(mean_elapsed_time, na.rm = T),
+                                                         mean_distance = mean(mean_distance, na.rm = T)),
+                                                     by = .(Origin, FlightDate, Year, Quarter, Month, DayofMonth, DayOfWeek)]
+
+dim(originlevel_disk_frame_2)
+
+```
+
+During this operation, the most activity in the Activity Monitor takes place in the CPU. Also, it can be seen that this aggregation process yields the same dimensions for the new dataset as in part 6 before. While this two-stage approach does not matter regarding the computations of the averages (average of sub-averages = overall average), the value for *top_airline* is probably different and here, one limitation of `{disk.frame}` can be identified. This is because, after the first aggregation, the individual counts of the airlines are not present anymore and the overall *top_airline* can only be chosen based on the most frequent *top_airline* among all chunks.
+
+### 12.8: Creating a numeric dataset for later analysis
+
+In this step, a new dataset containing only the numeric variables is created. For this purpose, the variables are again defined in a vector and then selected using the `select()` function.
+
+```{r 12_81, echo=TRUE}
+num_vars <- c('Year', 'Quarter', 'Month', 'DayofMonth', 'CRSDepTime', 'DepTime', 
+             'DepDelay', 'CRSArrTime', 'ArrTime', 'ArrDelay', 'CRSElapsedTime', 
+             'ActualElapsedTime', 'Distance')
+
+flights_num_df <- flights_disk_frame %>%
+  select(num_vars)
+
+names(flights_num_df)
+nrow(flights_num_df)
+```
+
+Hence, it can be seen that, as before, only the defined thirteen variables are kept in **flights_num_df**.
+
+Subsequently, the object can be exported to a csv file by applying `data.table::write()` to each chunk and appending all tables. This is because, `{disk.frame}` does not (yet) offer a possibility to export directly a disk frame to a csv file.
+
+```{r 12_82, eval=FALSE, include=TRUE}
+cmap(flights_num_df, function(chunk) {
+  fwrite(chunk, "data.nosync/flights_num_df.csv", append = TRUE)
+  }, lazy = FALSE)
+```
+
+
+### 12.10: Descriptive statistics
+
+For the first descriptive statistics, the values of the column *ActualElapsedTime* need to be sorted such that the longest flight can be identified. For this, `dplyr::arrange()` could be used, however, this `{dplyr}` operator is not (yet) fully supported by `{disk.frame}`. In this case, it only arranges each chunk but not the whole dataset. Hence, we use the alternative way for manipulation with `{disk.frame}` which is the `{data.table}` syntax.
+
+
+```{r 12_10, echo=TRUE}
+chunks_time <- flights_num_df[which.max(ActualElapsedTime)]
+chunks_time[which.max(chunks_time$ActualElapsedTime),]
+```
+
+Here, the same result as in part 10 can be observed.
+
+Next, it is evaluated which quarter in which year contains the most observations. Here, again the `{tidyverse}` syntax is used where just the contingency table is collected.
+
+```{r 12_10_2, echo=TRUE}
+flights_num_df %>% 
+  group_by(Quarter, Year) %>% 
+  summarise(N = n()) %>%
+  collect %>%
+  arrange(desc(N)) %>%
+  head(1)
+```
+
+As above, it can be seen that the third quarter in 1990 has the most, i.e. 1,348,581, observations.
+
+Next, the row indices of the observations from the first day of a month need be retrieved. As the function `which()` does not work on disk frames, we use here the `{data.table}` syntax, as in part 10.
+
+```{r 12_10_31, echo=TRUE}
+ind_first_day_df <- flights_num_df[DayofMonth == 1, which = TRUE]
+
+ind_first_day_df[1:5]
+```
+
+Here, the same first indices as in part 10 are observed.
+
+Next, it is evaluated for Christmas and New Years Eve on which of those days the flights are longer on average. This can again be implemented using `{tidyverse}` syntax with filtering and summarizing the data before loading it into memory.
+
+```{r 12_10_32, echo=TRUE}
+flights_num_df %>% 
+  filter(Month == 12 & DayofMonth == 24 & !is.na(ActualElapsedTime)) %>% 
+  summarise(mean = mean(ActualElapsedTime)) %>%
+  collect
+
+flights_num_df %>% 
+  filter(Month == 12 & DayofMonth == 31 & !is.na(ActualElapsedTime)) %>% 
+  summarise(mean = mean(ActualElapsedTime)) %>%
+  collect
+```
+
+Again, the same results as before can observed which are that the flights were on average longer on New Years Eve (114.34 min.) than on Christmas (113.1 min.).
+
+For the next subtask of part 10, it is evaluated whether the overall and average distance of short haul flights increased over the years. This can be analyzed in similar way of filtering, summarizing and finally collecting as before.
+
+```{r 12_10_4, echo=TRUE}
+flights_num_df %>% 
+  filter(Month == 12 & Year == 1988  & !is.na(Distance) & Distance <= 1000) %>% 
+  summarise(mean_distance = mean(Distance),
+            sum_distance = sum(Distance)) %>%
+  collect
+
+flights_num_df %>% 
+  filter(Month == 12 & Year == 1994  & !is.na(Distance) & Distance <= 1000) %>% 
+  summarise(mean_distance = mean(Distance),
+            sum_distance = sum(Distance)) %>%
+  collect
+```
+
+Again, the same results as before can observed, that is that both the average and overall distance increased over the years (in December) as one might have hypothesized.
+
+
+Finally, as another interesting question it was investigated whether the average arrival delay differs with regard to the departure time for short flights (defined as the ones with a duration of up to one hour). For this analysis, the departure time is split up into three intervals: 0-8, 8-16 and 16-24 o'clock.
+
+```{r 12_10_5, echo=TRUE}
+flights_num_df %>% 
+  filter(DepTime >= 0 & DepTime < 800 & !is.na(ArrDelay) & ActualElapsedTime <= 60) %>% 
+  summarise(mean_arr_delay = mean(ArrDelay)) %>%
+  collect
+
+flights_num_df %>% 
+  filter(DepTime >= 800 & DepTime < 1600 & !is.na(ArrDelay) & ActualElapsedTime <= 60) %>% 
+  summarise(mean_arr_delay = mean(ArrDelay)) %>%
+  collect
+
+flights_num_df %>% 
+  filter(DepTime >= 1600 & DepTime < 2400 & !is.na(ArrDelay) & ActualElapsedTime <= 60) %>% 
+  summarise(mean_arr_delay = mean(ArrDelay)) %>%
+  collect
+```
+
+As before, the same results can be identified.
+
+
+### 12.11: Linear regression
+
+In a next step, `{disk.frame}` is used to estimate a linear regression, with the same dependent and independent variables as in part 11. Now, this model can be implemented using `disk.frame::dfglm()`.
+
+```{r 12_11, echo=TRUE}
+model_df <- dfglm(ActualElapsedTime ~ Distance + as.factor(Month) + as.factor(Year) + DepDelay, data = flights_num_df)
+
+print(coefficients(model_df))
+print(object.size(model_df), units = "auto")
+```
+
+Here, the same coefficients of the estimated model as the ones in part 11 can be observed which indicates the equivalences of methods in terms of results. Also, the resulting object is very small in terms of memory.
+
+
+## Reflection
+
+###  What does it do well, where are its limitations?
+Similar to `{ff}`, `{disk.frame}` offers the advantage of storing and manipulating data on a hard drive. Hence, by loading and processing only chunks, it can deal with datasets that are larger than the memory and perform operations which would otherwise overload the RAM by doing those data processing operations on disk instead. Using the `{tidyverse}` syntax, one can manipulate and subset data and only load the result into memory ("collect") if desired (*lazy evaluation*). 
+
+Generally, the usage the possibility to use the familiar `{tidyverse}` and `{data.table}` syntax is an advantage which also provides flexibility in addition to other useful functions such as `cmap()`. However, here it is important to mention the limitation that not all verbs are yet integrated to deal with the chunk-wise structure (e.g. *arrange*, see part 12.10) where then workarounds are necessary. In addition, `{disk.frame}` makes use of the familiar structures `data.table::data.table` and `data.frame` which might be beneficial if one is experienced in working with these structures.
+
+Another advantage of `{disk.frame}` is *srckeep()* which reads in only the columns needed for the analysis, and hence disk IO time can be significantly reduced. Furthermore, the package provides the possibility for parallelization by using `setup_disk.frame(workers = 6)` and `options(future.globals.maxSize = Inf)`.
+
+However, as seen in task 10.6. one has to keep in mind that `{disk.frame}` performs operations in chunks and hence, a two-stage *group-by* might be necessary which makes it difficult to perform certain aggregations. One available solution is *hard_group_by*, however, this operation will re-chunk the entire `disk.frame` by the grouping arguments and is hence not recommended for performance reasons.
+
+Finally, part 12.8 shows the limitation that `{disk.frame}` does not (yet) offer a possibility to export directly a disk frame to a csv file and therefore, a workaround is needed. Similarly a function to retrieve indices (similar to `which()`) in not yet implemented.
+
+
+###  What are advantages and disadvantages over `{ff}` & `{bigmemory}`?
+Compared to `{bigmemory}`, `{disk.frame}` provides the benefit that all data types can be used due to the usage of `data.table::data.table` and `data.frame`. On the other hand, `{bigmemory}` supports only numeric matrices. Also, these numeric matrices can not be enlarged by adding rows/columns (*random access object*) and can not be used with many standard R functions directly, both points where `{disk.frame}` has the edge. On the other hand, `{bigmemory}` avoids the problems associated with chunking by using memory-mapping.
+Also, `{bigmemory}` has an entire family for performing certain manipulations or model buildings such as `{biganalytics}` or `{bigtabulate}`.
+
+Both `{ff}` and `{disk.frame}` can handle multiple data types and split a big file in several smaller ones. By conducting operations on chunks, the are both similarly slow. However, `{disk.frame}` can faster load the file faster once the chunks has been created because it uses, as `{bigmemory}` does, filebacking. On the other hand, this can be similarly implemented using `ffsave()` and `ffload()` to connect to the chunks. Here, however, it is important to mention that `{disk.frame}` splits the data in way less chunks which require significantly less memory and also have a more reasonable name than the ones of `{ff}`.
+Finally, `{ffbase}` provides several manipulation and aggregation functions for `ff`-objects.
+
+###  Which package would you most likely use in such situations going forward?
+Each of the three packages provides advantages and disadvantages, so I think it really depends on the use case. If you have only numeric data (in particular, dense matrices), filebacking with the `{big}`-family might be best to use due to the focus on numeric manipulations and the several packages which enable model building and manipulations with a `big.matrix` object. On the other hand, if one wants to analyze data containing several data types, `{ff}` and `{disk.frame}` should be used. Here, `{disk.frame}` is advisable when the filebacking matters because the dataset has to be imported often and when one wants to keep working environment of `data.table::data.table` and `data.frame` with the respective syntax. However, for certain operations, the chunk-wise computations are not suitable and then, `{ff}` should be preferred.
+
