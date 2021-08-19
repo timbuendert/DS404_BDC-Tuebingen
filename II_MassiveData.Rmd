@@ -1,6 +1,6 @@
 ---
 title: "Assignment II: Working locally with massive data"
-author: "Submitted by Tim-Moritz Bündert (Student ID: 5635975)"
+author: "Submitted by Tim-Moritz Bündert"
 date: "June 13, 2021"
 output: 
   html_document:

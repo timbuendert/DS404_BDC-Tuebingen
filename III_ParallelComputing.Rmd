@@ -1,6 +1,6 @@
 ---
 title: "Assignment III: Parallel computing"
-author: "Submitted by Tim-Moritz Bündert (Student ID: 5635975)"
+author: "Submitted by Tim-Moritz Bündert"
 date: "July 04, 2021"
 output: 
   html_document:

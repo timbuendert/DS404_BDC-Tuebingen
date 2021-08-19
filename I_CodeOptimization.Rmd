@@ -1,8 +1,10 @@
 ---
 title: "Assignment I: Code profiling, optimization, {data.table} "
-author: "Submitted by Tim-Moritz Bündert (Student ID: 5635975)"
+author: "Submitted by Tim-Moritz Bündert"
 date: "May 16, 2021"
-output: github_document
+output: 
+  html_document:
+    toc: true
 ---
 
 ```{r setup, include=FALSE}
