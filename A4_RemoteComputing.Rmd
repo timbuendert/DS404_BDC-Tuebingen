@@ -63,14 +63,14 @@ benchmarkme::get_ram()                  # RAM
 # Exercise 1: Running RStudio Server in the bwCloud
 > Install and set up RStudio Server on your personal virtual machine in the bwCloud.
 
-First, a RStudio Server is set up on my virtual machine in the bwCloud and the user **jonathanfuhr** with the corresponding password **BDC2021** and restricted permissions is created. The server can be accessed via http://193.196.55.154:8787/.
+First, a RStudio Server is set up on my virtual machine in the bwCloud and the user **XXX** with the corresponding password **XXX** and restricted permissions is created. The server can be accessed via XXX.
 
 # Exercise 2: Running a Shiny Server in the bwCloud
 > Install and set up Shiny Server on your personal virtual machine in the bwCloud
 
-Next, similar to exercise 1, a Shiny server is set up on my virtual machine in the bwCloud. There, a sample RShiny app is uploaded which displays time series of different economic variables in the US, such as the personal consumption expenditures (*pce*) ^[ggplot2, US economics time series, https://ggplot2.tidyverse.org/reference/economics.html, accessed on July 17, 2021]. This app can be accessed via http://193.196.55.154:3838/EconApp.
+Next, similar to exercise 1, a Shiny server is set up on my virtual machine in the bwCloud. There, a sample RShiny app is uploaded which displays time series of different economic variables in the US, such as the personal consumption expenditures (*pce*) ^[ggplot2, US economics time series, https://ggplot2.tidyverse.org/reference/economics.html, accessed on July 17, 2021]. This app can be accessed via XXX.
 
-In a second step, a R Markdown file (*example_rmd_document.Rmd* from ILIAS) is also uploaded to the Shiny server and rendered into a HTML version. The knitted document can be accessed via http://193.196.55.154:3838/rmd/example_rmd_document.Rmd.
+In a second step, a R Markdown file (*example_rmd_document.Rmd* from ILIAS) is also uploaded to the Shiny server and rendered into a HTML version. The knitted document can be accessed via XXX.
 
 # Exercise 3: Memory-efficient computing on the cluster
 > Write and execute two R scripts on the cluster. For each submitted batch script, include the batch script (.sh), the .out-file, and the .Rout-file as code in your .Rmd / .html assignment submission.
